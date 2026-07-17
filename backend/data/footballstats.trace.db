@@ -1,0 +1,39 @@
+2026-07-14 20:08:57.930677-03:00 jdbc[6]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "CLUBE" not found (this database is empty); SQL statement:
+select c1_0.id,c1_0.campeonato_id,c2_0.id,c2_0.nacao_id,n1_0.id,n1_0.nome,c2_0.nome,c1_0.nome from clube c1_0 join campeonato c2_0 on c2_0.id=c1_0.campeonato_id left join nacao n1_0 on n1_0.id=c2_0.nacao_id where c1_0.id=? [42104-224]
+2026-07-14 20:08:57.930677-03:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "CLUBE" not found (this database is empty); SQL statement:
+select c1_0.id,c1_0.campeonato_id,c1_0.nome from clube c1_0 [42104-224]
+2026-07-14 20:08:57.930677-03:00 jdbc[7]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "CLUBE" not found (this database is empty); SQL statement:
+select c1_0.id,c1_0.campeonato_id,c2_0.id,c2_0.nacao_id,n1_0.id,n1_0.nome,c2_0.nome,c1_0.nome from clube c1_0 join campeonato c2_0 on c2_0.id=c1_0.campeonato_id left join nacao n1_0 on n1_0.id=c2_0.nacao_id where c1_0.id=? [42104-224]
+2026-07-14 20:08:57.965847-03:00 jdbc[6]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "CLUBE" not found (this database is empty); SQL statement:
+select c1_0.id,c1_0.campeonato_id,c2_0.id,c2_0.nacao_id,n1_0.id,n1_0.nome,c2_0.nome,c1_0.nome from clube c1_0 join campeonato c2_0 on c2_0.id=c1_0.campeonato_id left join nacao n1_0 on n1_0.id=c2_0.nacao_id where c1_0.id=? [42104-224]
+2026-07-14 20:08:57.966873-03:00 jdbc[5]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "CLUBE" not found (this database is empty); SQL statement:
+select c1_0.id,c1_0.campeonato_id,c2_0.id,c2_0.nacao_id,n1_0.id,n1_0.nome,c2_0.nome,c1_0.nome from clube c1_0 join campeonato c2_0 on c2_0.id=c1_0.campeonato_id left join nacao n1_0 on n1_0.id=c2_0.nacao_id where c1_0.id=? [42104-224]
+2026-07-14 20:09:00.063348-03:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NACAO" not found (this database is empty); SQL statement:
+select n1_0.id,n1_0.nome from nacao n1_0 [42104-224]
+2026-07-15 12:40:03.148740-03:00 jdbc[4]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NACAO" not found (this database is empty); SQL statement:
+select n1_0.id,n1_0.nome from nacao n1_0 [42104-224]
+2026-07-15 12:40:14.807951-03:00 jdbc[4]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NACAO" not found (this database is empty); SQL statement:
+select n1_0.id,n1_0.nome from nacao n1_0 [42104-224]
+2026-07-15 12:44:27.773318-03:00 jdbc[6]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NACAO" not found (this database is empty); SQL statement:
+select n1_0.id,n1_0.nome from nacao n1_0 [42104-224]
+2026-07-15 12:45:04.139734-03:00 jdbc[3]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NACAO" not found (this database is empty); SQL statement:
+select n1_0.id,n1_0.nome from nacao n1_0 where upper(n1_0.nome)=upper(?) [42104-224]
+2026-07-15 12:48:02.817225-03:00 jdbc[5]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NACAO" not found (this database is empty); SQL statement:
+select n1_0.id,n1_0.nome from nacao n1_0 [42104-224]
+2026-07-15 12:48:07.401925-03:00 jdbc[8]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NACAO" not found (this database is empty); SQL statement:
+select n1_0.id,n1_0.nome from nacao n1_0 [42104-224]
+2026-07-15 12:56:29.779650-03:00 jdbc[7]: exception
+org.h2.jdbc.JdbcSQLSyntaxErrorException: Table "NACAO" not found (this database is empty); SQL statement:
+select n1_0.id,n1_0.nome from nacao n1_0 [42104-224]

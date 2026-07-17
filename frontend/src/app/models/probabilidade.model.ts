@@ -1,0 +1,256 @@
+/**
+ * probabilidade.model.ts
+ *
+ * Modelos probabilísticos para estimar o resultado de uma partida a partir
+ * dos gols esperados (lambda) de cada lado.
+ *
+ * Todos os modelos produzem uma MATRIZ de placares P(i,j) e, a partir dela,
+ * derivam 1X2, BTTS, chance dupla e placar mais provável. Assim a troca de
+ * modelo afeta só a construção da matriz — o resto do cálculo é comum.
+ *
+ * Referências conceituais:
+ *  - Poisson simples: assume independência entre os gols dos dois times.
+ *  - Dixon & Coles (1997): Poisson + correção tau nos placares baixos,
+ *    corrigindo a subestimação de 0-0 / 1-1 típica do Poisson puro.
+ *  - Bivariate Poisson: introduz covariância (lambda3) entre os times,
+ *    modelando jogos "abertos" (ambos marcam) vs "travados".
+ *  - Negative Binomial: cauda mais pesada que Poisson (overdispersion),
+ *    representando melhor goleadas e a variância real do futebol.
+ */
+
+export type ModeloId = 'poisson' | 'dixoncoles' | 'bivariate' | 'negbin';
+
+export interface ModeloInfo {
+  id: ModeloId;
+  nome: string;
+  descricao: string;
+}
+
+export const MODELOS: ModeloInfo[] = [
+  {
+    id: 'poisson',
+    nome: 'Poisson simples',
+    descricao: 'Baseline clássico. Assume independência entre os gols dos dois clubes. Rápido, mas subestima empates.'
+  },
+  {
+    id: 'dixoncoles',
+    nome: 'Dixon-Coles',
+    descricao: 'Poisson com correção (τ) nos placares baixos (0-0, 1-0, 0-1, 1-1). Padrão da literatura para futebol.'
+  },
+  {
+    id: 'bivariate',
+    nome: 'Bivariate Poisson',
+    descricao: 'Adiciona covariância entre os clubes: modela jogos abertos vs travados. Aumenta empates de forma natural.'
+  },
+  {
+    id: 'negbin',
+    nome: 'Negative Binomial',
+    descricao: 'Cauda mais pesada (overdispersion). Representa melhor a variância real e goleadas.'
+  }
+];
+
+/** Resultado agregado de qualquer modelo. */
+export interface ResultadoModelo {
+  vCasa: number; empate: number; vFora: number;
+  bttsSim: number; bttsNao: number;
+  dc1X: number; dc12: number; dcX2: number;
+  placarCasa: number; placarFora: number;
+  golsEsperados: number;         // total esperado (soma dos lambdas)
+  over: { [linha: string]: number };  // P(total > linha), ex.: "1.5" -> 72.3
+}
+
+const MAXG = 10;
+
+// ---------------------------------------------------------------------------
+// Distribuições base
+// ---------------------------------------------------------------------------
+
+/** ln(k!) via soma direta (k pequeno aqui, precisão suficiente). */
+function lnFat(k: number): number {
+  let s = 0;
+  for (let i = 2; i <= k; i++) s += Math.log(i);
+  return s;
+}
+
+/** P(X = k) para Poisson(lambda). */
+export function poisson(k: number, lambda: number): number {
+  if (lambda <= 0) return k === 0 ? 1 : 0;
+  return Math.exp(-lambda + k * Math.log(lambda) - lnFat(k));
+}
+
+/** ln(Gamma(x)) — aproximação de Lanczos (para Negative Binomial). */
+function lnGamma(x: number): number {
+  const g = 7;
+  const c = [
+    0.99999999999980993, 676.5203681218851, -1259.1392167224028,
+    771.32342877765313, -176.61502916214059, 12.507343278686905,
+    -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7
+  ];
+  if (x < 0.5) return Math.log(Math.PI / Math.sin(Math.PI * x)) - lnGamma(1 - x);
+  x -= 1;
+  let a = c[0];
+  const t = x + g + 0.5;
+  for (let i = 1; i < g + 2; i++) a += c[i] / (x + i);
+  return 0.5 * Math.log(2 * Math.PI) + (x + 0.5) * Math.log(t) - t + Math.log(a);
+}
+
+/**
+ * P(X = k) para Negative Binomial com média lambda e parâmetro de dispersão r.
+ * r → ∞ converge para Poisson; r menor = mais variância (cauda pesada).
+ */
+export function negBin(k: number, lambda: number, r: number): number {
+  if (lambda <= 0) return k === 0 ? 1 : 0;
+  const p = r / (r + lambda);
+  return Math.exp(
+    lnGamma(k + r) - lnGamma(r) - lnFat(k) + r * Math.log(p) + k * Math.log(1 - p)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Construção da matriz de placares por modelo
+// ---------------------------------------------------------------------------
+
+/** Matriz Poisson simples: produto das marginais (independência). */
+function matrizPoisson(lc: number, lf: number): number[][] {
+  const m: number[][] = [];
+  for (let i = 0; i <= MAXG; i++) {
+    m[i] = [];
+    for (let j = 0; j <= MAXG; j++) m[i][j] = poisson(i, lc) * poisson(j, lf);
+  }
+  return m;
+}
+
+/**
+ * Correção tau de Dixon-Coles, aplicada só aos placares baixos.
+ * rho < 0 aumenta 0-0 e 1-1 e reduz 1-0 / 0-1 (padrão empírico no futebol).
+ */
+function tauDixonColes(i: number, j: number, lc: number, lf: number, rho: number): number {
+  if (i === 0 && j === 0) return 1 - lc * lf * rho;
+  if (i === 0 && j === 1) return 1 + lc * rho;
+  if (i === 1 && j === 0) return 1 + lf * rho;
+  if (i === 1 && j === 1) return 1 - rho;
+  return 1;
+}
+
+/** Matriz Dixon-Coles: Poisson corrigido nos placares baixos. */
+function matrizDixonColes(lc: number, lf: number, rho: number): number[][] {
+  const m = matrizPoisson(lc, lf);
+  for (let i = 0; i <= 1; i++) {
+    for (let j = 0; j <= 1; j++) {
+      m[i][j] *= Math.max(0.0001, tauDixonColes(i, j, lc, lf, rho));
+    }
+  }
+  return m;
+}
+
+/**
+ * Bivariate Poisson: X = X1 + X3, Y = X2 + X3, com X3 ~ Poisson(l3) comum.
+ * P(x,y) = sum_{k=0}^{min(x,y)} Pois(x-k,l1) Pois(y-k,l2) Pois(k,l3)
+ * l3 > 0 gera correlação positiva (jogos abertos/travados).
+ */
+function matrizBivariate(lc: number, lf: number, l3: number): number[][] {
+  // l1 e l2 descontam a parte comum para preservar as médias marginais
+  const l1 = Math.max(0.01, lc - l3);
+  const l2 = Math.max(0.01, lf - l3);
+  const m: number[][] = [];
+  for (let i = 0; i <= MAXG; i++) {
+    m[i] = [];
+    for (let j = 0; j <= MAXG; j++) {
+      let s = 0;
+      const kmax = Math.min(i, j);
+      for (let k = 0; k <= kmax; k++) {
+        s += poisson(i - k, l1) * poisson(j - k, l2) * poisson(k, l3);
+      }
+      m[i][j] = s;
+    }
+  }
+  return m;
+}
+
+/** Matriz Negative Binomial (marginais independentes, cauda pesada). */
+function matrizNegBin(lc: number, lf: number, r: number): number[][] {
+  const m: number[][] = [];
+  for (let i = 0; i <= MAXG; i++) {
+    m[i] = [];
+    for (let j = 0; j <= MAXG; j++) m[i][j] = negBin(i, lc, r) * negBin(j, lf, r);
+  }
+  return m;
+}
+
+// ---------------------------------------------------------------------------
+// API pública
+// ---------------------------------------------------------------------------
+
+export interface ParamsModelo {
+  /** Dixon-Coles: correção dos placares baixos (tipicamente -0.03 a -0.15). */
+  rho?: number;
+  /** Bivariate: covariância comum entre os times. */
+  lambda3?: number;
+  /** Negative Binomial: dispersão (menor = cauda mais pesada). */
+  r?: number;
+}
+
+export const PARAMS_PADRAO: Required<ParamsModelo> = {
+  rho: -0.05,
+  lambda3: 0.15,
+  r: 8
+};
+
+/** Monta a matriz de placares conforme o modelo escolhido. */
+export function matrizPlacares(modelo: ModeloId, lc: number, lf: number,
+                               params: ParamsModelo = {}): number[][] {
+  const p = { ...PARAMS_PADRAO, ...params };
+  switch (modelo) {
+    case 'dixoncoles': return matrizDixonColes(lc, lf, p.rho);
+    case 'bivariate':  return matrizBivariate(lc, lf, Math.min(p.lambda3, Math.min(lc, lf) * 0.9));
+    case 'negbin':     return matrizNegBin(lc, lf, p.r);
+    default:           return matrizPoisson(lc, lf);
+  }
+}
+
+/**
+ * Calcula todas as probabilidades a partir da matriz do modelo escolhido.
+ * A matriz é normalizada (soma 1) antes de derivar os mercados, garantindo
+ * que as correções (tau, truncamento em MAXG) não distorçam os totais.
+ */
+export function calcular(modelo: ModeloId, lc: number, lf: number,
+                         params: ParamsModelo = {}): ResultadoModelo {
+  const m = matrizPlacares(modelo, lc, lf, params);
+
+  // normalização
+  let soma = 0;
+  for (let i = 0; i <= MAXG; i++) for (let j = 0; j <= MAXG; j++) soma += m[i][j];
+  if (soma <= 0) soma = 1;
+
+  let vCasa = 0, empate = 0, vFora = 0, btts = 0;
+  let melhor = -1, pi = 0, pj = 0;
+  const overLinhas = [0.5, 1.5, 2.5, 3.5, 4.5];
+  const overAcc: { [k: string]: number } = {};
+  overLinhas.forEach(l => overAcc[String(l)] = 0);
+
+  for (let i = 0; i <= MAXG; i++) {
+    for (let j = 0; j <= MAXG; j++) {
+      const p = m[i][j] / soma;
+      if (i > j) vCasa += p; else if (i === j) empate += p; else vFora += p;
+      if (i >= 1 && j >= 1) btts += p;
+      if (p > melhor) { melhor = p; pi = i; pj = j; }
+      const tot = i + j;
+      overLinhas.forEach(l => { if (tot > l) overAcc[String(l)] += p; });
+    }
+  }
+
+  const pct = (x: number) => x * 100;
+  const over: { [k: string]: number } = {};
+  overLinhas.forEach(l => over[String(l)] = pct(overAcc[String(l)]));
+
+  return {
+    vCasa: pct(vCasa), empate: pct(empate), vFora: pct(vFora),
+    bttsSim: pct(btts), bttsNao: pct(1 - btts),
+    dc1X: pct(vCasa + empate),
+    dc12: pct(vCasa + vFora),
+    dcX2: pct(empate + vFora),
+    placarCasa: pi, placarFora: pj,
+    golsEsperados: lc + lf,
+    over
+  };
+}

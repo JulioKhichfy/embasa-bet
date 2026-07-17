@@ -1,0 +1,5 @@
+# Formato: nacao;campeonato;clube1;clube2;...;clubeN
+# Linhas iniciadas por # e linhas em branco sao ignoradas.
+Brasil;Brasileirão Série A;Flamengo;Palmeiras;Corinthians;São Paulo;Grêmio;Internacional;Atlético-MG;Cruzeiro
+Brasil;Copa do Brasil;Flamengo;Palmeiras;Athletico-PR;Fluminense
+Argentina;Liga Profesional;River Plate;Boca Juniors;Racing;Independiente
