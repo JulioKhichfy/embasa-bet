@@ -105,3 +105,4 @@ test-output/
 *.pem
 *.key
 *.crt
+backend/data/footballstats.mv.db
