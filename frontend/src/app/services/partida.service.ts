@@ -27,6 +27,17 @@ export class PartidaService {
     return this.http.post<ImportLote>(`${this.url}/importar-lote`, fd);
   }
 
+  /**
+   * Upload global: N arquivos de um campeonato. O mandante de cada partida vem
+   * do nome do arquivo (padrao Clube_<id>.html).
+   */
+  importarGlobal(arquivos: File[], campeonatoId: number): Observable<ImportLote> {
+    const fd = new FormData();
+    arquivos.forEach(a => fd.append('arquivos', a));
+    fd.append('campeonatoId', String(campeonatoId));
+    return this.http.post<ImportLote>(`${this.url}/importar-global`, fd);
+  }
+
   detalheClube(clubeId: number, filtro: string, limite: number): Observable<ClubeDetalhe> {
     return this.http.get<ClubeDetalhe>(`${this.url}/clube/${clubeId}?filtro=${filtro}&limite=${limite}`);
   }

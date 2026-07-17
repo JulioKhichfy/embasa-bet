@@ -28,7 +28,7 @@ import { BackupService } from './services/backup.service';
         <input type="file" accept=".sql" hidden (change)="onRestaurar($event)">
       </label>
 
-      <button class="btn-danger" (click)="abrirLimpar()" title="Apagar TODOS os dados">
+      <button class="btn-danger" (click)="abrirLimpar()" title="Apagar o conteúdo das tabelas">
         🗑 Apagar banco
       </button>
     </div>
@@ -41,10 +41,13 @@ import { BackupService } from './services/backup.service';
     <!-- modal de confirmação do wipe -->
     <div *ngIf="mostrarLimpar" class="overlay" (click)="fecharLimpar()">
       <div class="modal card" (click)="$event.stopPropagation()">
-        <h2>⚠ Apagar todo o banco de dados</h2>
+        <h2>⚠ Apagar o conteúdo do banco</h2>
         <p>
-          Esta ação remove <b>todas</b> as nações, campeonatos, clubes, partidas e estatísticas.
+          Esta ação esvazia <b>todas</b> as tabelas: nações, campeonatos, clubes, partidas e estatísticas.
           <b>Não há como desfazer.</b>
+        </p>
+        <p class="muted mini">
+          A estrutura das tabelas é mantida e os ids recomeçam do 1 — não é preciso reiniciar o backend.
         </p>
         <p class="muted mini">
           Recomendado: gere um 💾 Backup antes de continuar.

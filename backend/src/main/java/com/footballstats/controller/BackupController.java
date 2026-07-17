@@ -13,17 +13,20 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.Connection;
+import java.sql.ResultSet;
 import java.sql.Statement;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * Backup do banco H2:
  *  - GET  /api/backup/dump      -> baixa um .sql completo (SCRIPT TO)
  *  - POST /api/backup/restaurar -> sobe um .sql e executa (RUNSCRIPT)
- *  - POST /api/backup/limpar    -> APAGA TODOS OS DADOS (DROP ALL OBJECTS)
+ *  - POST /api/backup/limpar    -> APAGA O CONTEUDO DAS TABELAS (mantem o schema)
  *
  * ATENCAO: restaurar e limpar sao operacoes destrutivas e irreversiveis.
  * Ambas exigem confirmacao explicita do usuario no frontend.
@@ -97,7 +100,15 @@ public class BackupController {
     }
 
     /**
-     * APAGA TODOS OS DADOS do banco. Operacao irreversivel.
+     * APAGA O CONTEUDO das tabelas, mantendo o SCHEMA intacto.
+     *
+     * Antes usava DROP ALL OBJECTS, o que derrubava as tabelas e exigia
+     * reiniciar o backend para o Hibernate recriar o schema. Agora fazemos
+     * TRUNCATE em todas as tabelas do schema PUBLIC (exceto as internas do
+     * Flyway/Hibernate), com as constraints desabilitadas durante a operacao
+     * para que a ordem das tabelas nao importe. As sequencias de IDENTITY sao
+     * reiniciadas, entao os ids voltam a comecar do 1.
+     *
      * Exige o parametro confirmacao=APAGAR como trava adicional.
      */
     @PostMapping("/limpar")
@@ -108,12 +119,53 @@ public class BackupController {
             resp.put("mensagem", "Confirmação inválida. Operação cancelada.");
             return ResponseEntity.badRequest().body(resp);
         }
+
         try (Connection conn = dataSource.getConnection();
              Statement st = conn.createStatement()) {
-            st.execute("DROP ALL OBJECTS");
+
+            List<String> tabelas = new ArrayList<>();
+            try (ResultSet rs = st.executeQuery(
+                    "SELECT TABLE_NAME FROM INFORMATION_SCHEMA.TABLES " +
+                    "WHERE TABLE_SCHEMA = 'PUBLIC' AND TABLE_TYPE IN ('BASE TABLE', 'TABLE')")) {
+                while (rs.next()) {
+                    String t = rs.getString("TABLE_NAME");
+                    if (t.startsWith("flyway_") || t.startsWith("FLYWAY_")) continue;
+                    tabelas.add(t);
+                }
+            }
+
+            if (tabelas.isEmpty()) {
+                resp.put("ok", false);
+                resp.put("mensagem", "Nenhuma tabela encontrada. O schema ainda não foi criado?");
+                return ResponseEntity.badRequest().body(resp);
+            }
+
+            int apagadas = 0;
+            // Com a integridade referencial desligada, o H2 permite TRUNCATE em
+            // tabelas referenciadas por FK (ex.: CLUBE, referenciada por PARTIDA),
+            // e a ordem das tabelas deixa de importar.
+            st.execute("SET REFERENTIAL_INTEGRITY FALSE");
+            try {
+                for (String t : tabelas) {
+                    try {
+                        st.execute("TRUNCATE TABLE \"" + t + "\" RESTART IDENTITY");
+                    } catch (Exception truncateFalhou) {
+                        // Fallback: alguma tabela que o H2 recusa truncar.
+                        // DELETE sempre funciona; so nao reinicia o IDENTITY.
+                        st.execute("DELETE FROM \"" + t + "\"");
+                    }
+                    apagadas++;
+                }
+            } finally {
+                st.execute("SET REFERENTIAL_INTEGRITY TRUE");
+            }
+
             resp.put("ok", true);
-            resp.put("mensagem", "Banco apagado. Reinicie o backend para recriar o schema vazio.");
+            resp.put("tabelas", apagadas);
+            resp.put("mensagem", "Conteúdo apagado (" + apagadas
+                    + " tabela(s) esvaziada(s)). O schema foi mantido — não é preciso reiniciar o backend.");
             return ResponseEntity.ok(resp);
+
         } catch (Exception e) {
             resp.put("ok", false);
             resp.put("mensagem", "Falha ao apagar: " + e.getMessage());

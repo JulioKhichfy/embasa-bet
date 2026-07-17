@@ -82,6 +82,50 @@ public class PartidaController {
         return ResponseEntity.ok(lote);
     }
 
+    /**
+     * Upload GLOBAL: N arquivos .html de um campeonato de uma vez.
+     * O clube da CASA vem do nome do arquivo, no padrao "Clube_<id>.html"
+     * (split("_")[0]), evitando ter que importar clube a clube.
+     * Ex.: "Chapecoense_15237944.html" -> mandante = Chapecoense.
+     */
+    @PostMapping("/importar-global")
+    public ResponseEntity<ImportLoteDTO> importarGlobal(
+            @RequestParam("arquivos") MultipartFile[] arquivos,
+            @RequestParam Long campeonatoId) throws IOException {
+
+        ImportLoteDTO lote = new ImportLoteDTO();
+
+        for (MultipartFile f : arquivos) {
+            String nome = f.getOriginalFilename();
+            lote.total++;
+            try {
+                String dicaCasa = PartidaService.clubeCasaDoNomeArquivo(nome);
+                if (dicaCasa == null) {
+                    lote.comErro++;
+                    ImportResultDTO err = ImportResultDTO.ignorada(
+                            "Nome de arquivo fora do padrao Clube_<id>.html; nao foi possivel definir o mandante.");
+                    err.nomeArquivo = nome;
+                    lote.resultados.add(err);
+                    continue;
+                }
+                String html = new String(f.getBytes(), StandardCharsets.UTF_8);
+                ImportResultDTO r = service.importarHtml(html, campeonatoId, null, dicaCasa);
+                r.nomeArquivo = nome;
+                if (r.importada) lote.importadas++; else lote.ignoradas++;
+                lote.resultados.add(r);
+            } catch (Exception e) {
+                lote.comErro++;
+                ImportResultDTO err = ImportResultDTO.ignorada("Erro ao processar: " + e.getMessage());
+                err.nomeArquivo = nome;
+                lote.resultados.add(err);
+            }
+        }
+
+        lote.mensagem = String.format("%d arquivo(s): %d importada(s), %d ignorada(s), %d com erro.",
+                lote.total, lote.importadas, lote.ignoradas, lote.comErro);
+        return ResponseEntity.ok(lote);
+    }
+
     /** Detalhe do clube: ultimas N partidas + medias. filtro=TODOS|CASA|FORA */
     @GetMapping("/clube/{clubeId}")
     public ClubeDetalheDTO detalhe(

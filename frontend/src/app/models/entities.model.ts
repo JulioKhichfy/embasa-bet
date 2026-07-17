@@ -95,6 +95,28 @@ export interface Comparacao {
   campos: CampoMeta[];
 }
 
+export interface FusaoResult {
+  ok: boolean;
+  mensagem: string;
+  clubeMantidoId?: number;
+  clubeMantidoNome?: string;
+  clubeRemovidoId?: number;
+  clubeRemovidoNome?: string;
+  partidasTransferidas: number;
+  partidasDescartadas: number;
+  avisos: string[];
+}
+
+export interface DuplicadoSugestao {
+  clubeAId: number;
+  clubeANome: string;
+  partidasA: number;
+  clubeBId: number;
+  clubeBNome: string;
+  partidasB: number;
+  campeonatoNome: string;
+}
+
 export interface RankingItem {
   clubeId: number;
   clubeNome: string;
