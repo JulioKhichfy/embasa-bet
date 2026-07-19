@@ -27,10 +27,7 @@ export class PartidaService {
     return this.http.post<ImportLote>(`${this.url}/importar-lote`, fd);
   }
 
-  /**
-   * Upload global: N arquivos de um campeonato. O mandante de cada partida vem
-   * do nome do arquivo (padrao Clube_<id>.html).
-   */
+  /** Lote GLOBAL: o clube da casa vem do nome do arquivo (<Clube>_<id>.html). */
   importarGlobal(arquivos: File[], campeonatoId: number): Observable<ImportLote> {
     const fd = new FormData();
     arquivos.forEach(a => fd.append('arquivos', a));
@@ -46,9 +43,11 @@ export class PartidaService {
     return this.http.get<Comparacao>(`${this.url}/comparacao?a=${a}&b=${b}&filtro=${filtro}&limite=${limite}`);
   }
 
-  /** Ranking de todos os clubes por quesito (quadro "Dados dos clubes"). */
-  ranking(filtro: string, limite: number): Observable<Ranking> {
-    return this.http.get<Ranking>(`${this.url}/ranking?filtro=${filtro}&limite=${limite}`);
+  /** Ranking dos clubes por quesito. Passe clubeId (um dos comparados) para
+   *  restringir ao campeonato dele -- senao vira ranking global (posicoes furadas). */
+  ranking(filtro: string, limite: number, clubeId?: number): Observable<Ranking> {
+    const q = clubeId != null ? `&clubeId=${clubeId}` : '';
+    return this.http.get<Ranking>(`${this.url}/ranking?filtro=${filtro}&limite=${limite}${q}`);
   }
 
   campos(): Observable<CampoMeta[]> { return this.http.get<CampoMeta[]>(`${this.url}/campos`); }

@@ -1,7 +1,7 @@
 import { Component } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
-import { RouterOutlet, RouterLink, RouterLinkActive } from '@angular/router';
+import { RouterOutlet, RouterLink, RouterLinkActive, Router, NavigationEnd } from '@angular/router';
 import { BackupService } from './services/backup.service';
 
 @Component({
@@ -28,7 +28,7 @@ import { BackupService } from './services/backup.service';
         <input type="file" accept=".sql" hidden (change)="onRestaurar($event)">
       </label>
 
-      <button class="btn-danger" (click)="abrirLimpar()" title="Apagar o conteúdo das tabelas">
+      <button class="btn-danger" (click)="abrirLimpar()" title="Apagar TODOS os dados">
         🗑 Apagar banco
       </button>
     </div>
@@ -41,13 +41,10 @@ import { BackupService } from './services/backup.service';
     <!-- modal de confirmação do wipe -->
     <div *ngIf="mostrarLimpar" class="overlay" (click)="fecharLimpar()">
       <div class="modal card" (click)="$event.stopPropagation()">
-        <h2>⚠ Apagar o conteúdo do banco</h2>
+        <h2>⚠ Apagar todo o banco de dados</h2>
         <p>
-          Esta ação esvazia <b>todas</b> as tabelas: nações, campeonatos, clubes, partidas e estatísticas.
+          Esta ação remove <b>todas</b> as nações, campeonatos, clubes, partidas e estatísticas.
           <b>Não há como desfazer.</b>
-        </p>
-        <p class="muted mini">
-          A estrutura das tabelas é mantida e os ids recomeçam do 1 — não é preciso reiniciar o backend.
         </p>
         <p class="muted mini">
           Recomendado: gere um 💾 Backup antes de continuar.
@@ -64,11 +61,12 @@ import { BackupService } from './services/backup.service';
       </div>
     </div>
 
-    <div class="container">
+    <div class="container" [class.wide]="rotaLarga">
       <router-outlet></router-outlet>
     </div>
   `,
   styles: [`
+    .container.wide { max-width: 100%; }
     .uploadbtn { cursor: pointer; display: inline-flex; align-items: center; padding: 8px 14px;
                  border-radius: 8px; font-size: 13px; font-weight: 600; border: 1px solid var(--border); }
     .uploadbtn:hover { filter: brightness(1.2); }
@@ -92,7 +90,16 @@ export class AppComponent {
   msg = '';
   msgOk = true;
 
-  constructor(public backup: BackupService) {}
+  rotaLarga = false;
+
+  constructor(public backup: BackupService, private router: Router) {
+    // comparação usa a largura toda; demais telas ficam centralizadas
+    this.router.events.subscribe(ev => {
+      if (ev instanceof NavigationEnd) {
+        this.rotaLarga = ev.urlAfterRedirects.startsWith('/comparacao');
+      }
+    });
+  }
 
   private toast(texto: string, ok: boolean) {
     this.msg = texto; this.msgOk = ok;

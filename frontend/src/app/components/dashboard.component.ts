@@ -25,6 +25,8 @@ interface GrupoCampeonato {
   campeonato: Campeonato;
   linhas: LinhaTabela[];
   aberto: boolean;
+  limite: number;
+  debounce?: any;
 }
 
 @Component({
@@ -37,11 +39,6 @@ interface GrupoCampeonato {
       <h1>Dashboard</h1>
       <p class="muted">Classificação por campeonato — clique no cabeçalho para expandir.</p>
     </div>
-    <div class="spacer"></div>
-    <label class="lim">Últimas
-      <input type="number" min="1" [ngModel]="limite" (ngModelChange)="onLimite($event)" style="width:64px">
-      partidas
-    </label>
   </div>
 
   <div *ngIf="selecionados.length === 2" class="cmpbar">
@@ -61,6 +58,11 @@ interface GrupoCampeonato {
       <b class="camp-nome">{{ g.nacao.nome }} · {{ g.campeonato.nome }}</b>
       <span class="pill">{{ g.linhas.length }} clube(s)</span>
       <span class="spacer"></span>
+      <label class="lim" (click)="$event.stopPropagation()" title="Últimas N partidas deste campeonato">
+        Últimas
+        <input type="number" min="1" [ngModel]="g.limite"
+               (ngModelChange)="onLimiteGrupo(g, $event)" style="width:56px">
+      </label>
       <span class="mini muted">líder: {{ g.linhas[0]?.clube?.nome || '—' }}</span>
     </div>
 
@@ -184,8 +186,7 @@ interface GrupoCampeonato {
 export class DashboardComponent implements OnInit {
   grupos: GrupoCampeonato[] = [];
   selecionados: Clube[] = [];
-  limite = 5;
-  private debounce?: any;
+  limiteInicial = 5;
 
   constructor(
     private nacaoSvc: NacaoService,
@@ -197,10 +198,12 @@ export class DashboardComponent implements OnInit {
 
   ngOnInit() { this.carregar(); }
 
-  onLimite(v: number) {
-    this.limite = v;
-    clearTimeout(this.debounce);
-    this.debounce = setTimeout(() => this.carregar(), 400);
+  onLimiteGrupo(g: GrupoCampeonato, v: number) {
+    g.limite = v;
+    clearTimeout(g.debounce);
+    g.debounce = setTimeout(() => {
+      g.linhas.forEach(ln => this.atualizarLinha(ln, g));
+    }, 400);
   }
 
   carregar() {
@@ -212,7 +215,7 @@ export class DashboardComponent implements OnInit {
           camps.forEach(camp => {
             this.clubeSvc.listar(camp.id).subscribe(clubes => {
               if (!clubes.length) return;
-              const grupo: GrupoCampeonato = { nacao, campeonato: camp, linhas: [], aberto: true };
+              const grupo: GrupoCampeonato = { nacao, campeonato: camp, linhas: [], aberto: true, limite: this.limiteInicial };
               clubes.forEach(cl => {
                 const ln: LinhaTabela = {
                   clube: cl, jogos: 0, pontos: 0, v: 0, e: 0, d: 0,
@@ -222,6 +225,7 @@ export class DashboardComponent implements OnInit {
                 this.atualizarLinha(ln, grupo);
               });
               this.grupos.push(grupo);
+              this.ordenarGrupos();
             });
           });
         });
@@ -231,7 +235,7 @@ export class DashboardComponent implements OnInit {
 
   /** Busca detalhe do clube e agrega os números da tabela de classificação. */
   atualizarLinha(ln: LinhaTabela, grupo: GrupoCampeonato) {
-    this.partidaSvc.detalheClube(ln.clube.id!, 'TODOS', this.limite).subscribe((d: ClubeDetalhe) => {
+    this.partidaSvc.detalheClube(ln.clube.id!, 'TODOS', grupo.limite).subscribe((d: ClubeDetalhe) => {
       ln.jogos = d.totalPartidas;
       ln.v = d.partidas.filter(p => p.resultado === 'V').length;
       ln.e = d.partidas.filter(p => p.resultado === 'E').length;
@@ -241,9 +245,16 @@ export class DashboardComponent implements OnInit {
       ln.gs = d.partidas.reduce((s, p) => s + p.golsSofridos, 0);
       ln.sg = ln.gf - ln.gs;
       ln.amarelos = d.partidas.reduce((s, p) => s + Math.round(p.estatisticas?.['cartoesAmarelos'] ?? 0), 0);
-      ln.seq = d.partidas.map(p => p.resultado).slice(0, this.limite).reverse();
+      ln.seq = d.partidas.map(p => p.resultado).slice(0, grupo.limite).reverse();
       this.ordenar(grupo);
     });
+  }
+
+  /** Accordions em ordem alfabética: nação, depois campeonato. */
+  ordenarGrupos() {
+    this.grupos.sort((a, b) =>
+      a.nacao.nome.localeCompare(b.nacao.nome, 'pt', { sensitivity: 'base' }) ||
+      a.campeonato.nome.localeCompare(b.campeonato.nome, 'pt', { sensitivity: 'base' }));
   }
 
   /** Pontos → vitórias → saldo → gols feitos → menos cartões → nome. */
@@ -301,7 +312,9 @@ export class DashboardComponent implements OnInit {
   limparSelecao() { this.selecionados = []; }
   comparar() {
     if (this.selecionados.length !== 2) return;
-    this.router.navigate(['/comparacao'], { queryParams: { a: this.selecionados[0].id, b: this.selecionados[1].id, limite: this.limite } });
+    const g = this.grupos.find(x => x.linhas.some(l => l.clube.id === this.selecionados[0].id));
+    const limite = g ? g.limite : this.limiteInicial;
+    this.router.navigate(['/comparacao'], { queryParams: { a: this.selecionados[0].id, b: this.selecionados[1].id, limite } });
   }
 
   abrirClube(c: Clube) { this.router.navigate(['/clube', c.id]); }

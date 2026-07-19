@@ -51,13 +51,34 @@ public class RankingService {
     };
 
     public RankingDTO ranking(String filtro, int limite) {
+        return ranking(filtro, limite, null);
+    }
+
+    /**
+     * @param campeonatoId  se != null, ranqueia SO os clubes desse campeonato.
+     *   E o comportamento correto: comparar cartoes/gols entre times do mesmo
+     *   campeonato. Sem isso, findAll() mistura campeonatos e as posicoes
+     *   estouram o numero de clubes (ex.: 48o num campeonato de 16 times).
+     */
+    /** Deriva o campeonato a partir de UM clube comparado e ranqueia so ele. */
+    public RankingDTO rankingPorClube(String filtro, int limite, Long clubeId) {
+        Long campId = (clubeId == null) ? null :
+                clubeRepo.findById(clubeId)
+                        .map(c -> c.getCampeonato() != null ? c.getCampeonato().getId() : null)
+                        .orElse(null);
+        return ranking(filtro, limite, campId);
+    }
+
+    public RankingDTO ranking(String filtro, int limite, Long campeonatoId) {
         String f = (filtro == null ? "TODOS" : filtro.toUpperCase());
 
         RankingDTO dto = new RankingDTO();
         dto.filtro = f;
         dto.limite = limite;
 
-        List<Clube> clubes = clubeRepo.findAll();
+        List<Clube> clubes = (campeonatoId != null)
+                ? clubeRepo.findByCampeonatoId(campeonatoId)
+                : clubeRepo.findAll();
 
         // Pre-carrega o detalhe de cada clube uma unica vez (evita N x quesitos consultas)
         List<ClubeDetalheDTO> detalhes = new ArrayList<>();

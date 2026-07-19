@@ -46,31 +46,14 @@ public class PartidaService {
      */
     @Transactional
     public ImportResultDTO importarHtml(String html, Long campeonatoId, Long clubeCasaId) {
-        return importarHtml(html, campeonatoId, clubeCasaId, null);
-    }
-
-    /**
-     * Import com dica de nome do mandante vinda do NOME DO ARQUIVO.
-     *
-     * @param dicaCasaNome (opcional) nome do clube da casa extraido do arquivo,
-     *                     ex.: "Chapecoense" em "Chapecoense_15237944.html".
-     *                     Serve para 2 coisas:
-     *                       1) decidir qual dos dois clubes do HTML e o mandante,
-     *                          caso a dica bata com o time de fora (arquivo salvo
-     *                          a partir da pagina do adversario);
-     *                       2) reaproveitar um clube ja cadastrado cujo nome seja
-     *                          equivalente (ex.: "Vasco" -> "Vasco da Gama").
-     */
-    @Transactional
-    public ImportResultDTO importarHtml(String html, Long campeonatoId, Long clubeCasaId, String dicaCasaNome) {
         SofaScoreParser.Resultado res = parser.parse(html);
 
         if (res.nomeClubeCasa == null || res.nomeClubeFora == null || res.data == null) {
             return ImportResultDTO.ignorada("Não foi possível extrair cabeçalho (clubes/data) do HTML.");
         }
 
-        Clube casa = resolverClube(res.nomeClubeCasa, campeonatoId, clubeCasaId, dicaCasaNome);
-        Clube fora = resolverClube(res.nomeClubeFora, campeonatoId, null, null);
+        Clube casa = resolverClube(res.nomeClubeCasa, campeonatoId, clubeCasaId);
+        Clube fora = resolverClube(res.nomeClubeFora, campeonatoId, null);
 
         // Duplicidade: mesma data + mesmos clubes -> ignora
         if (partidaRepo.existsByDataAndClubeCasaIdAndClubeForaId(res.data, casa.getId(), fora.getId())) {
@@ -109,27 +92,47 @@ public class PartidaService {
     }
 
     /**
-     * Nome do clube da casa a partir do nome do arquivo, no padrao
-     * "Clube_<id>.html" -> split("_")[0]. Underscores dentro do nome do clube
-     * NAO sao suportados por definicao do padrao.
-     */
-    public static String clubeCasaDoNomeArquivo(String nomeArquivo) {
-        if (nomeArquivo == null) return null;
-        String base = nomeArquivo;
-        int barra = Math.max(base.lastIndexOf('/'), base.lastIndexOf('\\'));
-        if (barra >= 0) base = base.substring(barra + 1);
-        String prefixo = base.split("_")[0].trim();
-        if (prefixo.isEmpty()) return null;
-        // se nao houver "_", o split devolve o nome inteiro; tira a extensao
-        int ponto = prefixo.lastIndexOf('.');
-        if (ponto > 0) prefixo = prefixo.substring(0, ponto).trim();
-        return prefixo.isEmpty() ? null : prefixo;
-    }
-
-    /**
      * Ordena os nomes de arquivo pelo número N em "partida_N.html".
      * Retorna a lista de índices na ordem correta de processamento.
      */
+    /**
+     * Import de UM arquivo no LOTE GLOBAL: o clube da casa vem do NOME DO
+     * ARQUIVO, no padrao "<Clube>_<eventId>.html" (ex.: Chapecoense_15237944.html).
+     *
+     * O nome do clube passa pela mesma cascata do resolverClube, entao
+     * "Atletico-Mineiro_123.html" acha "Atletico Mineiro" via apelido ou
+     * normalizacao -- nao cria clube novo.
+     */
+    @Transactional
+    public ImportResultDTO importarHtmlComNomeArquivo(String html, String nomeArquivo, Long campeonatoId) {
+        String nomeCasa = clubeDoNomeArquivo(nomeArquivo);
+        Long casaId = null;
+        if (nomeCasa != null) {
+            Clube c = resolverClube(nomeCasa, campeonatoId, null);
+            casaId = c.getId();
+        }
+        ImportResultDTO r = importarHtml(html, campeonatoId, casaId);
+        r.nomeArquivo = nomeArquivo;
+        return r;
+    }
+
+    /**
+     * "Chapecoense_15237944.html"      -> "Chapecoense"
+     * "Atletico-Mineiro_15237887.html" -> "Atletico Mineiro"
+     *
+     * O bookmarklet troca espacos por hifen ao montar o nome do arquivo;
+     * revertemos aqui. Clubes com hifen real no nome (Athletico-PR) sao
+     * cobertos pela normalizacao, que descarta espacos e hifens igualmente.
+     */
+    public String clubeDoNomeArquivo(String nomeArquivo) {
+        if (nomeArquivo == null) return null;
+        String base = nomeArquivo.replaceAll("(?i)\\.html?$", "");
+        int us = base.indexOf('_');
+        String parte = (us > 0) ? base.substring(0, us) : base;
+        parte = parte.replace('-', ' ').trim();
+        return parte.isEmpty() ? null : parte;
+    }
+
     public List<Integer> ordenarIndicesPorNumero(List<String> nomes) {
         List<Integer> idx = new ArrayList<>();
         for (int i = 0; i < nomes.size(); i++) idx.add(i);
@@ -146,33 +149,14 @@ public class PartidaService {
         return ultimo;
     }
 
-    // ------------------------------------------------------------------
-    // Resolucao de clube (com normalizacao de nome)
-    // ------------------------------------------------------------------
-
     /** Encontra clube por nome no campeonato; cria se ausente. */
-    private Clube resolverClube(String nome, Long campeonatoId, Long preferidoId, String dicaNome) {
+    private Clube resolverClube(String nome, Long campeonatoId, Long preferidoId) {
         if (preferidoId != null) {
             Optional<Clube> pref = clubeRepo.findById(preferidoId);
             if (pref.isPresent()) return pref.get();
         }
-
-        // 1) match exato (ignorando caixa) no campeonato
         Optional<Clube> existente = clubeRepo.findByNomeIgnoreCaseAndCampeonatoId(nome, campeonatoId);
         if (existente.isPresent()) return existente.get();
-
-        // 2) match normalizado: acentos, "-MG", "Red Bull", "da Gama", etc.
-        //    Em caso de ambiguidade, melhorEquivalente devolve null e criamos
-        //    um clube novo -- o usuario funde manualmente depois.
-        List<Clube> doCampeonato = clubeRepo.findByCampeonatoId(campeonatoId);
-        Clube porNome = ClubeNomes.melhorEquivalente(nome, doCampeonato);
-        if (porNome != null) return porNome;
-
-        // 3) match pela dica vinda do nome do arquivo
-        if (dicaNome != null) {
-            Clube porDica = ClubeNomes.melhorEquivalente(dicaNome, doCampeonato);
-            if (porDica != null) return porDica;
-        }
 
         Campeonato camp = campeonatoRepo.findById(campeonatoId)
                 .orElseThrow(() -> new RuntimeException("Campeonato " + campeonatoId + " não encontrado"));

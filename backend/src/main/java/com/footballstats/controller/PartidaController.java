@@ -4,6 +4,7 @@ import com.footballstats.dto.*;
 import com.footballstats.model.Partida;
 import com.footballstats.model.StatFields;
 import com.footballstats.service.PartidaService;
+import com.footballstats.service.RankingService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -18,18 +19,11 @@ import java.util.List;
 public class PartidaController {
 
     private final PartidaService service;
-    private final com.footballstats.service.RankingService rankingService;
-    public PartidaController(PartidaService service, com.footballstats.service.RankingService rankingService) {
+    private final RankingService rankingService;
+
+    public PartidaController(PartidaService service, RankingService rankingService) {
         this.service = service;
         this.rankingService = rankingService;
-    }
-
-    /** Ranking de TODOS os clubes por quesito (quadro "Dados dos clubes"). */
-    @GetMapping("/ranking")
-    public com.footballstats.dto.RankingDTO ranking(
-            @RequestParam(defaultValue = "TODOS") String filtro,
-            @RequestParam(defaultValue = "5") int limite) {
-        return rankingService.ranking(filtro, limite);
     }
 
     @GetMapping
@@ -53,8 +47,8 @@ public class PartidaController {
             @RequestParam Long campeonatoId,
             @RequestParam(required = false) Long clubeCasaId) throws IOException {
 
-        java.util.List<String> nomes = new java.util.ArrayList<>();
-        java.util.List<String> htmls = new java.util.ArrayList<>();
+        List<String> nomes = new ArrayList<>();
+        List<String> htmls = new ArrayList<>();
         for (MultipartFile f : arquivos) {
             nomes.add(f.getOriginalFilename());
             htmls.add(new String(f.getBytes(), StandardCharsets.UTF_8));
@@ -83,34 +77,28 @@ public class PartidaController {
     }
 
     /**
-     * Upload GLOBAL: N arquivos .html de um campeonato de uma vez.
-     * O clube da CASA vem do nome do arquivo, no padrao "Clube_<id>.html"
-     * (split("_")[0]), evitando ter que importar clube a clube.
-     * Ex.: "Chapecoense_15237944.html" -> mandante = Chapecoense.
+     * UPLOAD GLOBAL: N arquivos de QUALQUER clube do campeonato de uma vez.
+     * O clube da CASA sai do nome do arquivo, no padrao "<Clube>_<eventId>.html"
+     * (ex.: Chapecoense_15237944.html). Nao precisa mais entrar em cada card.
      */
     @PostMapping("/importar-global")
     public ResponseEntity<ImportLoteDTO> importarGlobal(
             @RequestParam("arquivos") MultipartFile[] arquivos,
             @RequestParam Long campeonatoId) throws IOException {
 
-        ImportLoteDTO lote = new ImportLoteDTO();
-
+        List<String> nomes = new ArrayList<>();
+        List<String> htmls = new ArrayList<>();
         for (MultipartFile f : arquivos) {
-            String nome = f.getOriginalFilename();
+            nomes.add(f.getOriginalFilename());
+            htmls.add(new String(f.getBytes(), StandardCharsets.UTF_8));
+        }
+
+        ImportLoteDTO lote = new ImportLoteDTO();
+        for (int i = 0; i < nomes.size(); i++) {
+            String nome = nomes.get(i);
             lote.total++;
             try {
-                String dicaCasa = PartidaService.clubeCasaDoNomeArquivo(nome);
-                if (dicaCasa == null) {
-                    lote.comErro++;
-                    ImportResultDTO err = ImportResultDTO.ignorada(
-                            "Nome de arquivo fora do padrao Clube_<id>.html; nao foi possivel definir o mandante.");
-                    err.nomeArquivo = nome;
-                    lote.resultados.add(err);
-                    continue;
-                }
-                String html = new String(f.getBytes(), StandardCharsets.UTF_8);
-                ImportResultDTO r = service.importarHtml(html, campeonatoId, null, dicaCasa);
-                r.nomeArquivo = nome;
+                ImportResultDTO r = service.importarHtmlComNomeArquivo(htmls.get(i), nome, campeonatoId);
                 if (r.importada) lote.importadas++; else lote.ignoradas++;
                 lote.resultados.add(r);
             } catch (Exception e) {
@@ -120,7 +108,6 @@ public class PartidaController {
                 lote.resultados.add(err);
             }
         }
-
         lote.mensagem = String.format("%d arquivo(s): %d importada(s), %d ignorada(s), %d com erro.",
                 lote.total, lote.importadas, lote.ignoradas, lote.comErro);
         return ResponseEntity.ok(lote);
@@ -143,6 +130,18 @@ public class PartidaController {
             @RequestParam(defaultValue = "TODOS") String filtro,
             @RequestParam(defaultValue = "5") int limite) {
         return service.comparar(a, b, filtro, limite);
+    }
+
+    /** Ranking de TODOS os clubes por quesito ("Dados dos clubes" na comparacao). */
+    @GetMapping("/ranking")
+    public RankingDTO ranking(
+            @RequestParam(defaultValue = "TODOS") String filtro,
+            @RequestParam(defaultValue = "5") int limite,
+            @RequestParam(required = false) Long clubeId,
+            @RequestParam(required = false) Long campeonatoId) {
+        // campeonatoId explicito tem prioridade; senao deriva do clube comparado
+        if (campeonatoId != null) return rankingService.ranking(filtro, limite, campeonatoId);
+        return rankingService.rankingPorClube(filtro, limite, clubeId);
     }
 
     /** Metadata dos campos (dirige a UI). */
