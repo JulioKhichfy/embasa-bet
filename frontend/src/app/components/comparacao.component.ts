@@ -52,6 +52,19 @@ interface LinhaPrev {
     </label>
   </div>
 
+  <!-- Posições na tabela (segundo o nº de jogos do recorte atual) -->
+  <div *ngIf="casa.detalhe && fora.detalhe" class="posbar card">
+    <span class="posItem">
+      <span class="posN cCasa">{{ posicaoTexto(casa.clubeId) }}</span>
+      <span class="posNome cCasa">{{ casa.nome }}</span>
+    </span>
+    <span class="posMid muted mini">posição na tabela ({{ filtroGlobal }}, {{ limiteBusca }} jogos) · {{ totalClubesRanking() }} clubes</span>
+    <span class="posItem right">
+      <span class="posNome cFora">{{ fora.nome }}</span>
+      <span class="posN cFora">{{ posicaoTexto(fora.clubeId) }}</span>
+    </span>
+  </div>
+
   <div class="split">
     <!-- LADO ESQUERDO: casa (a) -->
     <div class="lado">
@@ -402,6 +415,12 @@ interface LinhaPrev {
   `,
   styles: [`
     .head { display: flex; align-items: center; gap: 14px; }
+    .posbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 16px; margin-top: 12px; }
+    .posItem { display: flex; align-items: center; gap: 8px; }
+    .posItem.right { justify-content: flex-end; }
+    .posN { font-size: 22px; font-weight: 800; }
+    .posNome { font-weight: 700; }
+    .posMid { text-align: center; flex: 1; }
     .lim { color: var(--text-dim); display: flex; align-items: center; gap: 6px; }
     .split { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
     .sec { padding: 16px; }
@@ -504,8 +523,7 @@ interface LinhaPrev {
     .modTab tr.ativo .mNome { color: var(--accent); font-weight: 800; }
     .modTab tr:hover td { background: var(--surface); }
     .fbtns { display: inline-flex; gap: 3px; }
-    .fbtns.global { padding: 3px; border: 1px solid var(--accent); border-radius: 8px; }
-    .fbtn { padding: 3px 9px; font-size: 11px; border-radius: 6px; background: var(--surface-2); color: var(--text-dim); }
+    .fbtns.global { padding: 3px; border: 1px solid var(--accent); border-radius: 8px; }    .fbtn { padding: 3px 9px; font-size: 11px; border-radius: 6px; background: var(--surface-2); color: var(--text-dim); }
     .fbtn.on { background: var(--accent); color: #06121f; }
     .expBtn { padding: 4px 10px; font-size: 11px; }
     .dadosBox { margin: 18px 0; padding: 14px; background: var(--surface-2); border-radius: 10px; }
@@ -642,6 +660,27 @@ export class ComparacaoComponent implements OnInit {
   }
   ehComparado(clubeId: number): boolean {
     return clubeId === this.casa.clubeId || clubeId === this.fora.clubeId;
+  }
+
+  /** Quesito de classificação por pontos (chave 'posicaoTabela'), se presente. */
+  private quesitoPosicao(): RankingQuesito | undefined {
+    return this.ranking?.quesitos.find(q => q.chave === 'posicaoTabela');
+  }
+  /** Total de clubes no ranking (denominador da posição). */
+  totalClubesRanking(): number {
+    return this.quesitoPosicao()?.itens.length ?? 0;
+  }
+  /** Posição (1-based) do clube na tabela de pontos; 0 se não encontrado. */
+  posicaoTabela(clubeId: number): number {
+    const q = this.quesitoPosicao();
+    if (!q) return 0;
+    const idx = q.itens.findIndex(it => it.clubeId === clubeId);
+    return idx < 0 ? 0 : idx + 1;
+  }
+  /** Texto "3º" ou "—" para o cabeçalho. */
+  posicaoTexto(clubeId: number): string {
+    const p = this.posicaoTabela(clubeId);
+    return p > 0 ? `${p}º` : '—';
   }
 
   onLimiteBusca(v: number) {

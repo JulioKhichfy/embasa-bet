@@ -19,6 +19,20 @@ export class ClubeService {
   excluir(id: number): Observable<void> { return this.http.delete<void>(`${this.url}/${id}`); }
   contarPartidas(id: number): Observable<number> { return this.http.get<number>(`${this.url}/${id}/partidas-count`); }
 
+  /** Substitui todos os apelidos do clube. Retorna o clube atualizado. */
+  definirApelidos(id: number, apelidos: string[]): Observable<Clube> {
+    return this.http.put<Clube>(`${this.url}/${id}/apelidos`, apelidos);
+  }
+  /** Adiciona um apelido (texto simples). */
+  adicionarApelido(id: number, apelido: string): Observable<Clube> {
+    return this.http.post<Clube>(`${this.url}/${id}/apelidos`, apelido,
+      { headers: { 'Content-Type': 'text/plain' } });
+  }
+  /** Remove um apelido específico. */
+  removerApelido(id: number, apelido: string): Observable<Clube> {
+    return this.http.delete<Clube>(`${this.url}/${id}/apelidos?apelido=${encodeURIComponent(apelido)}`);
+  }
+
   /** Pares de clubes suspeitos de serem o mesmo. */
   duplicados(campeonatoId?: number): Observable<DuplicadoSugestao[]> {
     const q = campeonatoId ? `?campeonatoId=${campeonatoId}` : '';

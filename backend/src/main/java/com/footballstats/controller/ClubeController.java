@@ -24,6 +24,26 @@ public class ClubeController {
     }
     @GetMapping("/{id}") public Clube buscar(@PathVariable Long id) { return service.buscar(id); }
     @GetMapping("/{id}/partidas-count") public int contarPartidas(@PathVariable Long id) { return service.contarPartidas(id); }
+
+    // ---------------- apelidos manuais ----------------
+
+    /** Substitui todos os apelidos do clube (body: lista de strings). */
+    @PutMapping("/{id}/apelidos")
+    public Clube definirApelidos(@PathVariable Long id, @RequestBody List<String> apelidos) {
+        return service.definirApelidos(id, apelidos);
+    }
+
+    /** Adiciona um apelido (body cru, texto simples). */
+    @PostMapping("/{id}/apelidos")
+    public Clube adicionarApelido(@PathVariable Long id, @RequestBody String apelido) {
+        return service.adicionarApelido(id, apelido);
+    }
+
+    /** Remove um apelido especifico (query ?apelido=...). */
+    @DeleteMapping("/{id}/apelidos")
+    public Clube removerApelido(@PathVariable Long id, @RequestParam String apelido) {
+        return service.removerApelido(id, apelido);
+    }
     @PostMapping public Clube criar(@RequestParam Long campeonatoId, @RequestBody Clube c) { return service.salvar(campeonatoId, c); }
     @PutMapping("/{id}") public Clube atualizar(@PathVariable Long id, @RequestBody Clube c) { return service.atualizar(id, c); }
     @DeleteMapping("/{id}") public void excluir(@PathVariable Long id) { service.excluir(id); }

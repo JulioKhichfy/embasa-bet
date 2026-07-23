@@ -10,7 +10,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 @Service
 public class ClubeService {
@@ -55,6 +58,52 @@ public class ClubeService {
     /** Quantas partidas seriam removidas junto com o clube (para aviso no front). */
     public int contarPartidas(Long id) {
         return partidaRepo.findByClube(id).size();
+    }
+
+    // ---------------- apelidos manuais ----------------
+
+    /**
+     * Substitui o conjunto de apelidos do clube. Cada apelido e aparado; vazios
+     * sao ignorados. Duplicatas normalizadas (ex.: "Galo" e "galo") sao
+     * colapsadas, mantendo a primeira grafia digitada.
+     */
+    @Transactional
+    public Clube definirApelidos(Long clubeId, List<String> apelidos) {
+        Clube c = buscar(clubeId);
+        Set<String> novos = new LinkedHashSet<>();
+        Set<String> vistos = new HashSet<>();   // formas normalizadas ja incluidas
+        if (apelidos != null) {
+            for (String a : apelidos) {
+                if (a == null) continue;
+                String t = a.trim();
+                if (t.isEmpty()) continue;
+                String norm = ClubeNomes.normalizar(t);
+                // nao guarda apelido igual ao proprio nome (redundante) nem repetido
+                if (norm.isEmpty() || norm.equals(ClubeNomes.normalizar(c.getNome()))) continue;
+                if (vistos.add(norm)) novos.add(t);
+            }
+        }
+        c.getApelidos().clear();
+        c.getApelidos().addAll(novos);
+        return repo.save(c);
+    }
+
+    /** Adiciona um unico apelido (atalho do editor inline). */
+    @Transactional
+    public Clube adicionarApelido(Long clubeId, String apelido) {
+        Clube c = buscar(clubeId);
+        List<String> atuais = new ArrayList<>(c.getApelidos());
+        atuais.add(apelido);
+        return definirApelidos(clubeId, atuais);
+    }
+
+    /** Remove um apelido (comparacao normalizada). */
+    @Transactional
+    public Clube removerApelido(Long clubeId, String apelido) {
+        Clube c = buscar(clubeId);
+        String alvo = ClubeNomes.normalizar(apelido == null ? "" : apelido);
+        c.getApelidos().removeIf(a -> ClubeNomes.normalizar(a).equals(alvo));
+        return repo.save(c);
     }
 
     /**

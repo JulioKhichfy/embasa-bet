@@ -8,6 +8,16 @@ import { CampeonatoService } from '../services/campeonato.service';
 import { ClubeService } from '../services/clube.service';
 import { PartidaService } from '../services/partida.service';
 
+/** Uma partida no histórico "Últimas": resultado + contexto p/ o tooltip. */
+interface SeqItem {
+  r: 'V' | 'E' | 'D';
+  adversario: string;
+  emCasa: boolean;
+  golsFeitos: number;
+  golsSofridos: number;
+  data: string;
+}
+
 interface LinhaTabela {
   clube: Clube;
   jogos: number;
@@ -15,7 +25,7 @@ interface LinhaTabela {
   v: number; e: number; d: number;
   gf: number; gs: number; sg: number;
   amarelos: number;
-  seq: string[];          // V/E/D recentes (mais antiga → recente)
+  seq: SeqItem[];          // V/E/D recentes (mais antiga → recente)
   carregando: boolean;
   msg?: string;
 }
@@ -107,8 +117,9 @@ interface GrupoCampeonato {
               <td class="c">{{ ln.amarelos }}</td>
               <td class="c seqcol">
                 <span class="seq">
-                  <span *ngFor="let r of ln.seq" class="dot"
-                        [class.v]="r==='V'" [class.e]="r==='E'" [class.d]="r==='D'">{{ r }}</span>
+                  <span *ngFor="let s of ln.seq" class="dot"
+                        [class.v]="s.r==='V'" [class.e]="s.r==='E'" [class.d]="s.r==='D'"
+                        [title]="tooltipSeq(s)">{{ s.r }}</span>
                   <span *ngIf="!ln.seq.length" class="muted mini">—</span>
                 </span>
               </td>
@@ -166,7 +177,7 @@ interface GrupoCampeonato {
 
     .seqcol { width: 130px; }
     .seq { display: inline-flex; gap: 3px; }
-    .dot { width: 18px; height: 18px; border-radius: 4px; display: grid; place-items: center; font-size: 9px; font-weight: 800; background: var(--surface-2); }
+    .dot { width: 18px; height: 18px; border-radius: 4px; display: grid; place-items: center; font-size: 9px; font-weight: 800; background: var(--surface-2); cursor: help; }
     .dot.v { background: var(--win); color: #06210f; }
     .dot.e { background: var(--draw); color: #211c06; }
     .dot.d { background: var(--loss); color: #fff; }
@@ -264,9 +275,26 @@ export class DashboardComponent implements OnInit {
       ln.gs = d.partidas.reduce((s, p) => s + p.golsSofridos, 0);
       ln.sg = ln.gf - ln.gs;
       ln.amarelos = d.partidas.reduce((s, p) => s + Math.round(p.estatisticas?.['cartoesAmarelos'] ?? 0), 0);
-      ln.seq = d.partidas.map(p => p.resultado).slice(0, grupo.limite).reverse();
+      ln.seq = d.partidas
+        .slice(0, grupo.limite)
+        .map(p => ({
+          r: p.resultado,
+          adversario: p.adversario,
+          emCasa: p.emCasa,
+          golsFeitos: p.golsFeitos,
+          golsSofridos: p.golsSofridos,
+          data: p.data
+        }))
+        .reverse();
       this.ordenar(grupo);
     });
+  }
+
+  /** Texto do tooltip de um resultado: adversário, local e placar. */
+  tooltipSeq(s: SeqItem): string {
+    const nome = { V: 'Vitória', E: 'Empate', D: 'Derrota' }[s.r];
+    const local = s.emCasa ? 'em casa' : 'fora';
+    return `${nome} ${local} vs ${s.adversario} · ${s.golsFeitos}×${s.golsSofridos} (${s.data})`;
   }
 
   /** Accordions em ordem alfabética: nação, depois campeonato. */

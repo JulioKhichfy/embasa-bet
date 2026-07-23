@@ -149,7 +149,17 @@ public class PartidaService {
         return ultimo;
     }
 
-    /** Encontra clube por nome no campeonato; cria se ausente. */
+    /**
+     * Encontra clube por nome no campeonato; cria se ausente.
+     *
+     * Ordem de resolucao:
+     *  1) id preferido (quando sabemos o mandante pelo card ou nome do arquivo);
+     *  2) nome exato (ignore-case) no campeonato;
+     *  3) APELIDO manual: algum clube do campeonato cujo apelido casa o nome
+     *     (comparacao normalizada). Resolve "Galo" -> Atletico Mineiro sem
+     *     depender de heuristica, porque o apelido foi cadastrado pelo usuario;
+     *  4) nao achou -> cria clube novo.
+     */
     private Clube resolverClube(String nome, Long campeonatoId, Long preferidoId) {
         if (preferidoId != null) {
             Optional<Clube> pref = clubeRepo.findById(preferidoId);
@@ -157,6 +167,11 @@ public class PartidaService {
         }
         Optional<Clube> existente = clubeRepo.findByNomeIgnoreCaseAndCampeonatoId(nome, campeonatoId);
         if (existente.isPresent()) return existente.get();
+
+        // Apelido manual: procura entre os clubes do campeonato.
+        for (Clube c : clubeRepo.findByCampeonatoId(campeonatoId)) {
+            if (ClubeNomes.casaApelido(nome, c.getApelidos())) return c;
+        }
 
         Campeonato camp = campeonatoRepo.findById(campeonatoId)
                 .orElseThrow(() -> new RuntimeException("Campeonato " + campeonatoId + " não encontrado"));

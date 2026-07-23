@@ -2,7 +2,7 @@ export interface Nacao { id?: number; nome: string; }
 
 export interface Campeonato { id?: number; nome: string; nacao?: Nacao; }
 
-export interface Clube { id?: number; nome: string; campeonato?: Campeonato; }
+export interface Clube { id?: number; nome: string; campeonato?: Campeonato; apelidos?: string[]; }
 
 export interface Estatistica {
   id?: number;

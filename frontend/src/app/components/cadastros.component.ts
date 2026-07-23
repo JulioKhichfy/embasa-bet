@@ -184,10 +184,33 @@ import { PartidaService } from '../services/partida.service';
           <input [(ngModel)]="novoClube" placeholder="Nome do clube" (keyup.enter)="criarClube()">
           <button class="btn-primary" (click)="criarClube()">Adicionar</button>
         </div>
-        <ul class="lista">
-          <li *ngFor="let c of clubes">
-            <span>{{ c.nome }}</span>
-            <button class="btn-danger mini" (click)="excluirClube(c)">✕</button>
+        <p class="muted mini apehint">
+          Apelidos ajudam a importação a reconhecer o clube quando o SofaScore usa
+          outro nome (ex.: <i>Galo</i> ou <i>Athletico-MG</i> → <b>Atlético Mineiro</b>).
+          Digite ao lado do clube e tecle Enter.
+        </p>
+        <ul class="lista clubes-ape">
+          <li *ngFor="let c of clubes" class="clube-li">
+            <div class="clube-hd">
+              <span class="clube-nome">{{ c.nome }}</span>
+              <span class="spacer"></span>
+              <button class="btn-danger mini" (click)="excluirClube(c)" title="Excluir clube">✕</button>
+            </div>
+            <div class="apelinha">
+              <span class="ape-chip" *ngFor="let ap of (c.apelidos || [])">
+                {{ ap }}
+                <button class="ape-x" (click)="removerApelido(c, ap)" title="Remover apelido">×</button>
+              </span>
+              <span *ngIf="!(c.apelidos || []).length" class="muted mini semape">sem apelidos</span>
+              <input class="ape-input" [(ngModel)]="novoApelido[c.id!]"
+                     placeholder="+ apelido"
+                     (keyup.enter)="adicionarApelido(c)"
+                     [disabled]="salvandoApelido[c.id!]">
+              <button class="btn-ghost mini" (click)="adicionarApelido(c)"
+                      [disabled]="salvandoApelido[c.id!] || !(novoApelido[c.id!] || '').trim()">
+                {{ salvandoApelido[c.id!] ? '…' : 'add' }}
+              </button>
+            </div>
           </li>
           <li *ngIf="!clubes.length" class="vazio">Nenhum clube.</li>
         </ul>
@@ -207,6 +230,21 @@ import { PartidaService } from '../services/partida.service';
     .lista li.sel { background: rgba(62,166,255,.15); outline: 1px solid var(--accent); }
     .lista li.vazio { color: var(--text-dim); cursor: default; justify-content: flex-start; }
     .lista li.vazio:hover { background: transparent; }
+
+    /* editor de apelidos por clube */
+    .apehint { margin: 0 0 10px; }
+    .clubes-ape li.clube-li { flex-direction: column; align-items: stretch; gap: 6px; cursor: default; padding: 10px; }
+    .clubes-ape li.clube-li:hover { background: var(--surface-2); }
+    .clube-hd { display: flex; align-items: center; gap: 8px; }
+    .clube-nome { font-weight: 700; }
+    .apelinha { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+    .ape-chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 6px 2px 9px; font-size: 11px;
+                background: rgba(62,166,255,.14); border: 1px solid var(--accent); border-radius: 999px; }
+    .ape-x { background: transparent; border: 0; color: var(--text-dim); font-size: 14px; line-height: 1; cursor: pointer; padding: 0 2px; }
+    .ape-x:hover { color: var(--loss); }
+    .semape { font-style: italic; }
+    .ape-input { width: 120px; padding: 3px 8px; font-size: 12px; }
+    .mini { font-size: 11px; }
     .mini { padding: 2px 7px; font-size: 11px; }
     @media (max-width: 900px) { .grid3 { grid-template-columns: 1fr; } }
     .importbox { padding: 16px; margin: 16px 0; }
@@ -246,6 +284,10 @@ export class CadastrosComponent implements OnInit {
   novaNacao = '';
   novoCamp = '';
   novoClube = '';
+  /** rascunho do apelido em edição, por clubeId. */
+  novoApelido: { [clubeId: number]: string } = {};
+  /** flag de "salvando" por clubeId (desabilita o input). */
+  salvandoApelido: { [clubeId: number]: boolean } = {};
   importResult?: ImportCadastro;
 
   // upload global
@@ -403,6 +445,39 @@ export class CadastrosComponent implements OnInit {
         : `Excluir clube "${c.nome}"?`;
       if (!confirm(aviso)) return;
       this.clubeSvc.excluir(c.id!).subscribe(() => this.selecionarCamp(this.campSel!));
+    });
+  }
+
+  // ---------------- apelidos manuais ----------------
+
+  /** Adiciona o apelido em edição ao clube (envia a lista completa). */
+  adicionarApelido(c: Clube) {
+    const id = c.id!;
+    const novo = (this.novoApelido[id] || '').trim();
+    if (!novo) return;
+    const lista = [...(c.apelidos || []), novo];
+    this.salvandoApelido[id] = true;
+    this.clubeSvc.definirApelidos(id, lista).subscribe({
+      next: atualizado => {
+        c.apelidos = atualizado.apelidos || [];
+        this.novoApelido[id] = '';
+        this.salvandoApelido[id] = false;
+      },
+      error: () => { this.salvandoApelido[id] = false; }
+    });
+  }
+
+  /** Remove um apelido do clube (envia a lista sem ele). */
+  removerApelido(c: Clube, apelido: string) {
+    const id = c.id!;
+    const lista = (c.apelidos || []).filter(a => a !== apelido);
+    this.salvandoApelido[id] = true;
+    this.clubeSvc.definirApelidos(id, lista).subscribe({
+      next: atualizado => {
+        c.apelidos = atualizado.apelidos || [];
+        this.salvandoApelido[id] = false;
+      },
+      error: () => { this.salvandoApelido[id] = false; }
     });
   }
 }
