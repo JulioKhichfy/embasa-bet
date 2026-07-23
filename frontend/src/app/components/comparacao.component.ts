@@ -606,7 +606,11 @@ export class ComparacaoComponent implements OnInit {
 
   // ---------------- Ranking / Dados dos clubes ----------------
   carregarRanking() {
-    this.partidaSvc.ranking(this.filtroRanking, this.limiteBusca).subscribe(r => this.ranking = r);
+    // passa um dos clubes comparados -> o backend restringe o ranking ao
+    // campeonato dele. Sem este 3o argumento, cai em findAll() e mistura
+    // clubes de outros campeonatos (posicoes furadas, ex.: 48o em liga de 16).
+    this.partidaSvc.ranking(this.filtroRanking, this.limiteBusca, this.casa.clubeId)
+      .subscribe(r => this.ranking = r);
   }
   setFiltroRanking(f: string) { this.filtroRanking = f; this.carregarRanking(); }
 
