@@ -33,14 +33,27 @@ public class RankingService {
         this.partidaService = partidaService;
     }
 
-    /** Quesitos que saem do mapa de estatisticas. */
+    /**
+     * Quesitos que saem do mapa de estatisticas.
+     *
+     * NOTA sobre os pedidos originais:
+     *  - "faltas realizadas"  -> campo "faltas" (existe).
+     *  - "faltas sofridas"    -> NAO existe um campo dedicado. O SofaScore so
+     *    exporta "Faltas sofridas no terco final" (faltasSofridasTercoFinal),
+     *    que e um recorte parcial. Incluimos esse como aproximacao rotulada.
+     *  - "cabecadas"          -> NAO existe NENHUM campo no SofaScore/StatFields.
+     *    Sem coleta na origem, nao ha como ranquear. Fica de fora ate haver dado.
+     */
     private static final String[][] QUESITOS_STAT = {
-            { "cartoesAmarelos",   "Cartões amarelos" },
-            { "cartoesVermelhos",  "Cartões vermelhos" },
-            { "finalizacoes",      "Finalizações (chutes)" },
-            { "finalizacoesNoGol", "Chutes ao gol" },
-            { "escanteios",        "Escanteios" },
-            { "impedimentos",      "Impedimentos" }
+            { "finalizacoes",            "Chutes (total)" },
+            { "finalizacoesNoGol",       "Chutes ao gol" },
+            { "cartoesAmarelos",         "Cartões amarelos" },
+            { "cartoesVermelhos",        "Cartões vermelhos" },
+            { "escanteios",              "Escanteios" },
+            { "faltas",                  "Faltas realizadas" },
+            { "faltasSofridasTercoFinal","Faltas sofridas (terço final)" },
+            { "tirosDeMeta",             "Tiros de meta" },
+            { "impedimentos",            "Impedimentos" }
     };
 
     /** Quesitos derivados do placar. */
@@ -88,6 +101,9 @@ public class RankingService {
             } catch (Exception ignored) { /* clube sem partidas ou erro pontual -> ignora */ }
         }
 
+        // Classificacao (pontos) primeiro: e a resposta para "quem esta melhor".
+        dto.quesitos.add(montarQuesitoPontos(clubes, detalhes));
+
         for (String[] q : QUESITOS_STAT) {
             dto.quesitos.add(montarQuesitoStat(q[0], q[1], clubes, detalhes));
         }
@@ -95,6 +111,25 @@ public class RankingService {
             dto.quesitos.add(montarQuesitoPlacar(q[0], q[1], clubes, detalhes));
         }
         return dto;
+    }
+
+    /**
+     * Quesito "Posição na tabela": ranqueia por PONTOS (V*3 + E) no recorte de
+     * partidas considerado (filtro + limite). O 'total' e a soma de pontos e a
+     * 'media' os pontos por jogo (aproveitamento). A ordenacao decrescente ja
+     * produz a posicao (1o = mais pontos), coerente com a classificacao do
+     * dashboard. Desempate por pontos/jogo e depois nome.
+     */
+    private RankingDTO.Quesito montarQuesitoPontos(List<Clube> clubes, List<ClubeDetalheDTO> detalhes) {
+        RankingDTO.Quesito q = new RankingDTO.Quesito("posicaoTabela", "Posição na tabela (pontos)");
+        for (ClubeDetalheDTO d : detalhes) {
+            if (d.partidas == null || d.partidas.isEmpty()) continue;
+            float pontos = 0f;
+            for (PartidaResumoDTO p : d.partidas) pontos += p.pontos;
+            q.itens.add(novoItem(clubes, d, pontos));
+        }
+        ordenar(q);
+        return q;
     }
 
     private RankingDTO.Quesito montarQuesitoStat(String campo, String rotulo,

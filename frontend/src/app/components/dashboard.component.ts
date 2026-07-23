@@ -222,14 +222,33 @@ export class DashboardComponent implements OnInit {
                   gf: 0, gs: 0, sg: 0, amarelos: 0, seq: [], carregando: false
                 };
                 grupo.linhas.push(ln);
-                this.atualizarLinha(ln, grupo);
               });
               this.grupos.push(grupo);
               this.ordenarGrupos();
+              // Default do "últimas N" = clube com mais jogos no campeonato.
+              this.definirLimiteMaximo(grupo, clubes[0].id!);
             });
           });
         });
       });
+    });
+  }
+
+  /**
+   * Descobre o clube com mais jogos no campeonato (via ranking, limite alto),
+   * ajusta g.limite para esse máximo e então carrega as linhas com esse N.
+   * Se falhar, cai no limiteInicial.
+   */
+  private definirLimiteMaximo(grupo: GrupoCampeonato, clubeIdQualquer: number) {
+    const carregarLinhas = () => grupo.linhas.forEach(ln => this.atualizarLinha(ln, grupo));
+    this.partidaSvc.ranking('TODOS', 9999, clubeIdQualquer).subscribe({
+      next: r => {
+        let max = 0;
+        for (const q of r.quesitos) for (const it of q.itens) if (it.jogos > max) max = it.jogos;
+        grupo.limite = max > 0 ? max : this.limiteInicial;
+        carregarLinhas();
+      },
+      error: () => { grupo.limite = this.limiteInicial; carregarLinhas(); }
     });
   }
 
