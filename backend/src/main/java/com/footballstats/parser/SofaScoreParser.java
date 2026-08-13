@@ -56,7 +56,14 @@ public class SofaScoreParser {
         public Integer golsFora1T;
 
         public LocalDate data;
+        /** Horario do apito inicial, ex. "21:00". */
+        public String hora;
+
         public String arbitro;
+        /** Media de cartoes AMARELOS por jogo deste arbitro, quando informada. */
+        public Float arbitroMediaAmarelos;
+        /** Media de cartoes VERMELHOS por jogo deste arbitro, quando informada. */
+        public Float arbitroMediaVermelhos;
 
         public Map<String, Float> casa   = new LinkedHashMap<>();
         public Map<String, Float> fora   = new LinkedHashMap<>();
@@ -75,10 +82,14 @@ public class SofaScoreParser {
     private static final Pattern NUM    = Pattern.compile("-?\\d+(?:[.,]\\d+)?");
     private static final Pattern PCT    = Pattern.compile("(\\d+(?:[.,]\\d+)?)\\s*%");
     private static final Pattern PLACAR = Pattern.compile("(\\d{1,2})\\s*[-–:]\\s*(\\d{1,2})");
-    private static final Pattern ROTULO_1T = Pattern.compile(
-            "^(1[oº°]?\\s*tempo|primeiro\\s*tempo|intervalo|1st\\s*half|halftime|ht)$");
-    private static final Pattern ROTULO_ARBITRO = Pattern.compile(
-            "^(arbitro|referee|juiz)\\s*:?$");
+    /** Marcador do intervalo no fluxo da partida: um <span> com "HT 1 - 0". */
+    private static final Pattern MARCA_HT = Pattern.compile("^HT\\s*(\\d{1,2})\\s*[-–:]\\s*(\\d{1,2})$");
+    /** Marcador do fim de jogo: "FT 1 - 1". Usado so para conferencia. */
+    private static final Pattern MARCA_FT = Pattern.compile("^FT\\s*(\\d{1,2})\\s*[-–:]\\s*(\\d{1,2})$");
+    private static final Pattern ROTULO_ARBITRO = Pattern.compile("^(árbitro|arbitro|referee|juiz)\\s*:?$");
+    private static final Pattern HORA = Pattern.compile("^([01]?\\d|2[0-3]):([0-5]\\d)$");
+    /** Classe atomica que o SofaScore usa para colorir o icone de cartao vermelho. */
+    private static final String CLASSE_VERMELHO = "c_status.error.default";
 
     private final Properties props;
 
@@ -167,8 +178,9 @@ public class SofaScoreParser {
             r.avisos.add("Placar final extraido por XPath (fallback frágil).");
         }
 
-        extrairPlacar1T(doc, spanPlacar, r);
+        extrairPlacar1T(doc, r);
         extrairArbitro(doc, r);
+        extrairHora(doc, r);
 
         LocalDate data = null;
         if (dataStr != null) data = tentarData(dataStr);
@@ -197,65 +209,131 @@ public class SofaScoreParser {
     }
 
     /**
-     * Placar do intervalo.
+     * Placar do intervalo, lido do FLUXO DA PARTIDA.
      *
-     * Procura um rotulo de primeiro tempo e, subindo poucos niveis, um "N - M"
-     * proximo. Como esse tipo de busca por vizinhanca erra facil, o resultado so
-     * e aceito se passar em tres guardas:
+     * O SofaScore emite um <span> cujo texto e literalmente "HT 1 - 0" no meio
+     * da linha do tempo de eventos, e outro com "FT 1 - 1" no fim. Nada de
+     * busca por vizinhanca: a ancora e o proprio texto do no, no mesmo espirito
+     * do <span> [digito, "-", digito] que ancora o placar final.
      *
-     *   1) nao pode ser o proprio <span> do placar final;
-     *   2) gols do 1T de cada lado <= gols finais daquele lado (impossivel
-     *      desmarcar gol);
-     *   3) o par nao pode ser identico ao placar final quando o final tem gols
-     *      -- seria quase certamente o placar final capturado por engano.
-     *
-     * A guarda 3 descarta o caso legitimo em que nenhum gol saiu no 2o tempo.
-     * E uma troca deliberada: perder amostra e barato, contaminar a base com
-     * placar de intervalo errado nao e.
+     * O FT serve de conferencia. Se ele existir e divergir do placar do
+     * cabecalho, algo esta errado na leitura e registramos um aviso em vez de
+     * gravar dado suspeito em silencio.
      */
-    private void extrairPlacar1T(Document doc, Element spanPlacarFinal, Resultado r) {
-        for (Element e : doc.getAllElements()) {
-            if (!e.children().isEmpty()) continue;
-            if (!ROTULO_1T.matcher(normalizar(e.ownText())).matches()) continue;
+    private void extrairPlacar1T(Document doc, Resultado r) {
+        Integer ftCasa = null, ftFora = null;
 
-            Element cont = e;
-            for (int i = 0; i < 5 && cont != null; i++) {
-                cont = cont.parent();
-                if (cont == null || cont == spanPlacarFinal) break;
+        for (Element sp : doc.select("span")) {
+            if (!sp.children().isEmpty()) continue;
+            String t = sp.text().trim();
 
-                Matcher mm = PLACAR.matcher(cont.text());
-                while (mm.find()) {
-                    int c = Integer.parseInt(mm.group(1));
-                    int f = Integer.parseInt(mm.group(2));
-                    if (c > r.golsCasa || f > r.golsFora) continue;              // guarda 2
-                    if ((r.golsCasa + r.golsFora) > 0
-                            && c == r.golsCasa && f == r.golsFora) continue;     // guarda 3
-                    r.golsCasa1T = c;
-                    r.golsFora1T = f;
-                    return;
-                }
+            Matcher ht = MARCA_HT.matcher(t);
+            if (ht.matches() && r.golsCasa1T == null) {
+                r.golsCasa1T = Integer.parseInt(ht.group(1));
+                r.golsFora1T = Integer.parseInt(ht.group(2));
+                continue;
+            }
+            Matcher ft = MARCA_FT.matcher(t);
+            if (ft.matches() && ftCasa == null) {
+                ftCasa = Integer.parseInt(ft.group(1));
+                ftFora = Integer.parseInt(ft.group(2));
             }
         }
-        r.avisos.add("Placar do 1º tempo não encontrado; mercados por tempo ficam sem esta partida.");
+
+        if (ftCasa != null && (ftCasa != r.golsCasa || ftFora != r.golsFora)) {
+            r.avisos.add("Divergência: cabeçalho diz " + r.golsCasa + "-" + r.golsFora
+                    + " mas o fluxo diz FT " + ftCasa + "-" + ftFora + ". Placar do 1º tempo descartado.");
+            r.golsCasa1T = null;
+            r.golsFora1T = null;
+            return;
+        }
+        if (r.golsCasa1T == null) {
+            r.avisos.add("Marcador HT não encontrado; esta partida não alimenta os mercados por tempo.");
+            return;
+        }
+        if (r.golsCasa1T > r.golsCasa || r.golsFora1T > r.golsFora) {
+            r.avisos.add("Placar do 1º tempo (" + r.golsCasa1T + "-" + r.golsFora1T
+                    + ") maior que o final; descartado.");
+            r.golsCasa1T = null;
+            r.golsFora1T = null;
+        }
     }
 
-    /** Nome do arbitro: rotulo "Árbitro"/"Referee" e o texto vizinho. */
+    /**
+     * Arbitro e, quando disponivel, a media de cartoes dele.
+     *
+     * O bloco tem a forma: <span>Árbitro</span> <span>NOME</span>
+     * <span>Média de cartões <svg/>0.24 <svg/>5.50</span>.
+     *
+     * A media de cartoes do arbitro e o preditor isolado mais forte do mercado
+     * de cartoes -- vale mais que a media dos dois clubes somada. Capturar isto
+     * e o maior ganho gratuito deste parser.
+     *
+     * Qual numero e vermelho e qual e amarelo: preferimos a classe atomica do
+     * <svg> ("c_status.error.default" = vermelho). Se a classe mudar, caimos
+     * numa regra de magnitude -- nenhum arbitro do mundo da mais vermelhos que
+     * amarelos, entao o maior dos dois e sempre o amarelo.
+     */
     private void extrairArbitro(Document doc, Resultado r) {
-        for (Element e : doc.getAllElements()) {
-            if (!e.children().isEmpty()) continue;
-            if (!ROTULO_ARBITRO.matcher(normalizar(e.ownText())).matches()) continue;
+        for (Element sp : doc.select("span")) {
+            if (!sp.children().isEmpty()) continue;
+            if (!ROTULO_ARBITRO.matcher(normalizar(sp.ownText())).matches()) continue;
 
-            Element pai = e.parent();
-            if (pai == null) continue;
-            for (Element irmao : pai.getAllElements()) {
-                if (irmao == e || !irmao.children().isEmpty()) continue;
-                String txt = irmao.ownText().trim();
-                if (txt.length() >= 3 && txt.length() <= 60
-                        && !ROTULO_ARBITRO.matcher(normalizar(txt)).matches()
-                        && !txt.matches(".*\\d.*")) {
+            Element bloco = sp.parent();
+            if (bloco == null) continue;
+
+            for (Element cand : bloco.select("span")) {
+                String txt = cand.text().trim();
+                if (txt.isEmpty() || cand == sp) continue;
+                if (normalizar(txt).startsWith("media de cartoes")
+                        || normalizar(txt).startsWith("média de cartões")) continue;
+                if (txt.length() >= 3 && txt.length() <= 60 && !txt.matches(".*\\d.*")) {
                     r.arbitro = txt;
-                    return;
+                    break;
                 }
+            }
+            lerMediaCartoes(bloco, r);
+            if (r.arbitro != null) return;
+        }
+    }
+
+    private void lerMediaCartoes(Element bloco, Resultado r) {
+        Float vermelho = null, amarelo = null;
+        List<Float> todos = new ArrayList<>();
+
+        for (Element svg : bloco.select("svg")) {
+            String classe = svg.className();
+            // o numero da media e o texto imediatamente apos o <svg>
+            org.jsoup.nodes.Node prox = svg.nextSibling();
+            String txt = prox != null ? prox.toString().trim() : "";
+            Matcher mm = NUM.matcher(txt);
+            if (!mm.find()) continue;
+            float v;
+            try { v = Float.parseFloat(mm.group()); } catch (NumberFormatException e) { continue; }
+            todos.add(v);
+            if (classe.contains(CLASSE_VERMELHO)) vermelho = v;
+        }
+        if (todos.size() == 2) {
+            if (vermelho != null) {
+                amarelo = todos.get(0).equals(vermelho) ? todos.get(1) : todos.get(0);
+            } else {
+                // fallback por magnitude: amarelo e sempre o maior
+                amarelo  = Math.max(todos.get(0), todos.get(1));
+                vermelho = Math.min(todos.get(0), todos.get(1));
+                r.avisos.add("Cor do ícone de cartão não identificada; média do árbitro inferida por magnitude.");
+            }
+            r.arbitroMediaAmarelos = amarelo;
+            r.arbitroMediaVermelhos = vermelho;
+        }
+    }
+
+    /** Horario do apito inicial, do bloco "Data e hora". */
+    private void extrairHora(Document doc, Resultado r) {
+        for (Element sp : doc.select("span, div")) {
+            if (!sp.children().isEmpty()) continue;
+            if (HORA.matcher(sp.ownText().trim()).matches()) {
+                r.hora = sp.ownText().trim();
+                return;
             }
         }
     }

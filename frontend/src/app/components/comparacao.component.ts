@@ -10,15 +10,21 @@ import { MODELOS, ModeloId, ResultadoModelo, calcular, PARAMS_PADRAO } from '../
 /**
  * Estado de um clube na comparação (casa ou fora).
  *
- * O filtro TODOS/CASA/FORA agora é GLOBAL (ver `filtroGlobal` no componente):
- * uma única fonte de partidas por lado (`detalhe`) alimenta a listagem, o
- * quadro por partida e as médias. `limiteMedia` continua por lado só para o
- * recorte de N no quadro/médias.
+ * O filtro TODOS/CASA/FORA é POR LADO e INDEPENDENTE: cada clube recorta as
+ * SUAS partidas sem mexer no outro lado. É o que permite a pergunta que motiva
+ * a tela — "como o mandante se comporta em casa contra como o visitante se
+ * comporta fora" — que um filtro global torna impossível de fazer.
+ *
+ * O ranking e a posição na tabela ficam FIXOS em TODOS de propósito: são
+ * propriedades do campeonato, não do recorte de cada lado. Filtrá-los junto
+ * produziria uma "tabela só de jogos em casa", que não é a classificação real
+ * e induziria a erro na leitura.
  */
 interface LadoClube {
   clubeId: number;
   nome: string;
-  detalhe?: ClubeDetalhe;        // fonte única de partidas (respeita filtroGlobal)
+  filtro: string;                // 'TODOS' | 'CASA' | 'FORA' — só deste lado
+  detalhe?: ClubeDetalhe;        // partidas já recortadas pelo filtro deste lado
   limiteMedia: number;           // N do select próprio da média/quadro
   abertos: Set<number>;          // partidaIds com accordion aberto
   // desativados[partidaId] = Set de campos desativados naquela partida
@@ -42,10 +48,6 @@ interface LinhaPrev {
     <button class="btn-ghost" (click)="voltar()">← Voltar</button>
     <h1>Comparação</h1>
     <span class="spacer"></span>
-    <div class="fbtns global" title="Filtro global: aplica-se a TUDO nesta página">
-      <button *ngFor="let f of filtros" class="fbtn" [class.on]="filtroGlobal===f"
-              (click)="setFiltroGlobal(f)">{{ f }}</button>
-    </div>
     <label class="lim">Buscar últimas
       <input type="number" min="1" [ngModel]="limiteBusca" (ngModelChange)="onLimiteBusca($event)" style="width:64px">
       partidas
@@ -58,7 +60,7 @@ interface LinhaPrev {
       <span class="posN cCasa">{{ posicaoTexto(casa.clubeId) }}</span>
       <span class="posNome cCasa">{{ casa.nome }}</span>
     </span>
-    <span class="posMid muted mini">posição na tabela ({{ filtroGlobal }}, {{ limiteBusca }} jogos) · {{ totalClubesRanking() }} clubes</span>
+    <span class="posMid muted mini">posição na tabela (todos os jogos, últimos {{ limiteBusca }}) · {{ totalClubesRanking() }} clubes</span>
     <span class="posItem right">
       <span class="posNome cFora">{{ fora.nome }}</span>
       <span class="posN cFora">{{ posicaoTexto(fora.clubeId) }}</span>
@@ -223,13 +225,14 @@ interface LinhaPrev {
       <div class="secHd">
         <h3>Dados dos clubes</h3>
         <span class="spacer"></span>
-        <span class="pill">{{ filtroGlobal }}</span>
+        <span class="pill" title="O ranking é do campeonato inteiro e não segue os filtros dos painéis">TODOS</span>
         <button class="btn-ghost expBtn" (click)="rankingExpandido = !rankingExpandido">
           {{ rankingExpandido ? 'Ver só os comparados' : 'Ver ranking geral' }}
         </button>
       </div>
       <p class="muted mini">
-        Ranking dos clubes <b>do campeonato</b> ({{ filtroGlobal }}, últimas {{ limiteBusca }} partidas).
+        Ranking dos clubes <b>do campeonato</b> (todos os jogos, últimas {{ limiteBusca }} partidas).
+        <b>Não segue os filtros CASA/FORA dos painéis</b>: a classificação é do campeonato, não do recorte de cada lado.
         <b>T</b> = total somado · <b>M</b> = média por partida. Linhas destacadas são os clubes em comparação.
         Para <b>Posição na tabela</b>, T = pontos e M = pontos por jogo.
       </p>
@@ -291,12 +294,20 @@ interface LinhaPrev {
   <!-- Template reutilizável para cada lado -->
   <ng-template #painel let-l="l" let-cor="cor">
     <div *ngIf="l.detalhe" class="card sec">
-      <h2 [class.cCasa]="cor==='casa'" [class.cFora]="cor==='fora'">{{ l.nome }}</h2>
+      <div class="ladoHd">
+        <h2 [class.cCasa]="cor==='casa'" [class.cFora]="cor==='fora'">{{ l.nome }}</h2>
+        <span class="spacer"></span>
+        <div class="fbtns lado" [class.bCasa]="cor==='casa'" [class.bFora]="cor==='fora'"
+             [title]="'Filtro de ' + l.nome + ' — afeta apenas este painel'">
+          <button *ngFor="let f of filtros" class="fbtn" [class.on]="l.filtro===f"
+                  (click)="setFiltro(l, f)">{{ f }}</button>
+        </div>
+      </div>
 
       <div class="secHd">
         <h3>Últimas {{ l.detalhe.partidas.length }} partidas</h3>
         <span class="spacer"></span>
-        <span class="pill">{{ filtroGlobal }}</span>
+        <span class="pill">{{ l.filtro }}</span>
       </div>
       <div class="acc" *ngFor="let p of l.detalhe.partidas">
         <div class="acc-hd" (click)="toggleAccordion(l, p.partidaId)">
@@ -347,7 +358,7 @@ interface LinhaPrev {
           </label>
         </div>
         <p class="muted mini">
-          {{ partidasQuadro(l).length }} partida(s) · filtro {{ filtroGlobal }} · itens desativados (🚫) são ignorados.
+          {{ partidasQuadro(l).length }} partida(s) · filtro {{ l.filtro }} · itens desativados (🚫) são ignorados.
         </p>
 
         <div class="qwrap" *ngIf="partidasQuadro(l).length; else semQuadro">
@@ -392,7 +403,7 @@ interface LinhaPrev {
         <div class="mediaHd">
           <h3>Média aritmética</h3>
           <span class="spacer"></span>
-          <span class="pill">{{ filtroGlobal }}</span>
+          <span class="pill">{{ l.filtro }}</span>
           <label class="lim">N
             <select [ngModel]="l.limiteMedia" (ngModelChange)="setLimiteMedia(l, $event)">
               <option *ngFor="let n of rangeN(l.detalhe?.partidas?.length || 0)" [value]="n">{{ n }}</option>
@@ -400,7 +411,7 @@ interface LinhaPrev {
           </label>
         </div>
         <p class="muted mini">
-          Base: {{ l.detalhe?.partidas?.length || 0 }} partida(s) ({{ filtroGlobal }}), usando as {{ l.limiteMedia }} primeiras.
+          Base: {{ l.detalhe?.partidas?.length || 0 }} partida(s) ({{ l.filtro }}), usando as {{ l.limiteMedia }} primeiras.
         </p>
         <div *ngFor="let cat of categorias">
           <h4>{{ cat }}</h4>
@@ -523,7 +534,11 @@ interface LinhaPrev {
     .modTab tr.ativo .mNome { color: var(--accent); font-weight: 800; }
     .modTab tr:hover td { background: var(--surface); }
     .fbtns { display: inline-flex; gap: 3px; }
-    .fbtns.global { padding: 3px; border: 1px solid var(--accent); border-radius: 8px; }    .fbtn { padding: 3px 9px; font-size: 11px; border-radius: 6px; background: var(--surface-2); color: var(--text-dim); }
+    .ladoHd { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+    .ladoHd h2 { margin: 0; }
+    .fbtns.lado { padding: 3px; border: 1px solid var(--border); border-radius: 8px; }
+    .fbtns.lado.bCasa { border-color: var(--accent); }
+    .fbtns.lado.bFora { border-color: var(--accent-2); }    .fbtn { padding: 3px 9px; font-size: 11px; border-radius: 6px; background: var(--surface-2); color: var(--text-dim); }
     .fbtn.on { background: var(--accent); color: #06121f; }
     .expBtn { padding: 4px 10px; font-size: 11px; }
     .dadosBox { margin: 18px 0; padding: 14px; background: var(--surface-2); border-radius: 10px; }
@@ -560,8 +575,6 @@ export class ComparacaoComponent implements OnInit {
   fora: LadoClube = this.novoLado();
   limiteBusca = 5;
   filtros = ['TODOS', 'CASA', 'FORA'];
-  /** Filtro GLOBAL da página: governa listagem, quadro, médias e ranking. */
-  filtroGlobal = 'TODOS';
   /** N máximo de jogos no campeonato (default do seletor de "últimas N"). */
   maxJogosCampeonato = 0;
   modelos = MODELOS;
@@ -587,7 +600,7 @@ export class ComparacaoComponent implements OnInit {
   constructor(private route: ActivatedRoute, private router: Router, private partidaSvc: PartidaService) {}
 
   novoLado(): LadoClube {
-    return { clubeId: 0, nome: '',
+    return { clubeId: 0, nome: '', filtro: 'TODOS',
              limiteMedia: 5, abertos: new Set(), desativados: new Map() };
   }
 
@@ -627,25 +640,34 @@ export class ComparacaoComponent implements OnInit {
     this.carregarRanking();
   }
 
-  /** Fonte única de partidas por lado, sempre com o filtro GLOBAL. */
+  /** Carrega as partidas de UM lado, com o filtro daquele lado. */
   carregarLado(l: LadoClube) {
-    this.partidaSvc.detalheClube(l.clubeId, this.filtroGlobal, this.limiteBusca).subscribe(d => {
+    this.partidaSvc.detalheClube(l.clubeId, l.filtro, this.limiteBusca).subscribe(d => {
       l.nome = d.clubeNome;
       l.detalhe = d;
       if (l.limiteMedia > d.partidas.length) l.limiteMedia = d.partidas.length || 1;
     });
   }
 
-  /** Filtro GLOBAL: recarrega listagem, quadro, médias e ranking de uma vez. */
-  setFiltroGlobal(f: string) {
-    this.filtroGlobal = f;
-    this.carregar();
+  /**
+   * Troca o filtro de UM lado e recarrega só ele.
+   *
+   * Não chama carregar(): o outro painel não pode ser tocado, e o ranking não
+   * depende de filtro. Recarregar tudo aqui reintroduziria o acoplamento que
+   * esta tela precisa não ter.
+   */
+  setFiltro(l: LadoClube, f: string) {
+    if (l.filtro === f) return;
+    l.filtro = f;
+    this.carregarLado(l);
   }
 
   // ---------------- Ranking / Dados dos clubes ----------------
   carregarRanking() {
     // clubeId restringe o ranking ao campeonato do clube comparado.
-    this.partidaSvc.ranking(this.filtroGlobal, this.limiteBusca, this.casa.clubeId)
+    // Sempre 'TODOS': a classificação é do campeonato e não acompanha os
+    // filtros dos painéis (ver comentário em LadoClube).
+    this.partidaSvc.ranking('TODOS', this.limiteBusca, this.casa.clubeId)
       .subscribe(r => this.ranking = r);
   }
 
