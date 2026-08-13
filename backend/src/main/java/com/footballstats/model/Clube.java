@@ -19,6 +19,22 @@ public class Clube {
     @Column(nullable = false)
     private String nome;
 
+    /**
+     * Id deste clube na fonte (SofaScore), lido do breadcrumb da pagina:
+     * /football/team/botafogo/1958 -> 1958.
+     *
+     * E a identidade mais estavel que existe. O nome exibido muda (patrocinio,
+     * grafia, acento, sufixo de estado) e e justamente o que gera clube
+     * duplicado na importacao; o id nao muda. Quando presente, ele tem
+     * precedencia sobre qualquer casamento por nome.
+     *
+     * Nullable porque clubes cadastrados a mao ou importados antes desta versao
+     * nao tem. O ClubeResolver preenche assim que o clube aparece num import
+     * que traga o id.
+     */
+    @Column(unique = true)
+    private Long idExterno;
+
     // 1 CAMPEONATO possui 0..N CLUBE
     @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "campeonato_id", nullable = false)

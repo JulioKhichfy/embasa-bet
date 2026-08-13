@@ -59,6 +59,16 @@ public class SofaScoreParser {
         /** Horario do apito inicial, ex. "21:00". */
         public String hora;
 
+        /**
+         * Identidade do jogo na fonte, lida do breadcrumb. Muito mais confiavel
+         * que casar por nome: "Atlético-MG" e "Atletico Mineiro" sao o mesmo id.
+         */
+        public Long idExternoCasa;
+        public Long idExternoFora;
+        public String nacao;
+        public String campeonato;
+        public Long campeonatoIdExterno;
+
         public String arbitro;
         /** Media de cartoes AMARELOS por jogo deste arbitro, quando informada. */
         public Float arbitroMediaAmarelos;
@@ -87,6 +97,13 @@ public class SofaScoreParser {
     /** Marcador do fim de jogo: "FT 1 - 1". Usado so para conferencia. */
     private static final Pattern MARCA_FT = Pattern.compile("^FT\\s*(\\d{1,2})\\s*[-–:]\\s*(\\d{1,2})$");
     private static final Pattern ROTULO_ARBITRO = Pattern.compile("^(árbitro|arbitro|referee|juiz)\\s*:?$");
+    /** /pt/football/team/botafogo/1958 */
+    private static final Pattern HREF_TIME = Pattern.compile("/football/team/[^/]+/(\\d+)$");
+    /** /pt/football/tournament/brazil/brasileirao-serie-a/325 */
+    private static final Pattern HREF_TORNEIO = Pattern.compile("/football/tournament/([^/]+)/([^/]+)/(\\d+)$");
+    /** /pt/football/brazil */
+    private static final Pattern HREF_NACAO = Pattern.compile("^/[a-z]{2}/football/([a-z-]+)$");
+
     private static final Pattern HORA = Pattern.compile("^([01]?\\d|2[0-3]):([0-5]\\d)$");
     /** Classe atomica que o SofaScore usa para colorir o icone de cartao vermelho. */
     private static final String CLASSE_VERMELHO = "c_status.error.default";
@@ -181,6 +198,7 @@ public class SofaScoreParser {
         extrairPlacar1T(doc, r);
         extrairArbitro(doc, r);
         extrairHora(doc, r);
+        extrairBreadcrumb(doc, r);
 
         LocalDate data = null;
         if (dataStr != null) data = tentarData(dataStr);
@@ -334,6 +352,67 @@ public class SofaScoreParser {
             if (HORA.matcher(sp.ownText().trim()).matches()) {
                 r.hora = sp.ownText().trim();
                 return;
+            }
+        }
+    }
+
+    /**
+     * Nacao, campeonato e ids externos dos clubes, lidos do breadcrumb.
+     *
+     * Os hrefs do SofaScore sao a coisa mais estavel da pagina inteira: o texto
+     * visivel muda com patrocinio ("Brasileirão Betano" era "Brasileirão Assaí"),
+     * a diagramacao muda a cada release, mas /football/team/botafogo/1958 nao
+     * muda. Guardar o id externo elimina a adivinhacao de nome na importacao --
+     * casamos por identidade, e o nome vira so rotulo.
+     *
+     * O torneio aparece duas vezes no breadcrumb: uma com fragmento "#id:87"
+     * (temporada) e o texto poluido pela rodada, outra limpa. O regex exige o
+     * final em digitos, o que descarta a versao com fragmento.
+     */
+    private void extrairBreadcrumb(Document doc, Resultado r) {
+        List<Element> links = doc.select("a[href]");
+
+        for (Element a : links) {
+            String href = a.attr("href");
+
+            Matcher mt = HREF_TORNEIO.matcher(href);
+            if (mt.find() && r.campeonato == null) {
+                r.campeonato = a.text().trim();
+                r.campeonatoIdExterno = Long.parseLong(mt.group(3));
+                continue;
+            }
+            Matcher mn = HREF_NACAO.matcher(href);
+            if (mn.matches() && r.nacao == null) {
+                String t = a.text().trim();
+                // o primeiro link e o esporte ("Futebol"); a nacao vem depois
+                if (!t.isEmpty() && !normalizar(t).equals("futebol")) r.nacao = t;
+            }
+        }
+
+        // Times: casamos pelo TEXTO do link com os nomes ja extraidos, em vez de
+        // confiar na ordem. Se o layout inverter os links, o id vai junto do nome
+        // certo em vez de trocar mandante por visitante em silencio.
+        List<Element> times = new ArrayList<>();
+        for (Element a : links) {
+            if (HREF_TIME.matcher(a.attr("href")).find()) times.add(a);
+        }
+        for (Element a : times) {
+            Matcher m = HREF_TIME.matcher(a.attr("href"));
+            if (!m.find()) continue;
+            long id = Long.parseLong(m.group(1));
+            String txt = a.text().trim();
+            if (igual(txt, r.nomeClubeCasa) && r.idExternoCasa == null) r.idExternoCasa = id;
+            else if (igual(txt, r.nomeClubeFora) && r.idExternoFora == null) r.idExternoFora = id;
+        }
+        if ((r.idExternoCasa == null || r.idExternoFora == null) && times.size() >= 2) {
+            r.avisos.add("IDs externos casados por posição, não por nome; confira o mandante.");
+            if (r.idExternoCasa == null) {
+                Matcher m = HREF_TIME.matcher(times.get(0).attr("href"));
+                if (m.find()) r.idExternoCasa = Long.parseLong(m.group(1));
+            }
+            if (r.idExternoFora == null) {
+                Matcher m = HREF_TIME.matcher(times.get(1).attr("href"));
+                if (m.find()) r.idExternoFora = Long.parseLong(m.group(1));
             }
         }
     }

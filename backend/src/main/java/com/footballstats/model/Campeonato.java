@@ -19,6 +19,19 @@ public class Campeonato {
     @Column(nullable = false)
     private String nome;
 
+    /**
+     * Id do torneio na fonte: /football/tournament/brazil/brasileirao-serie-a/325
+     * -> 325.
+     *
+     * Resolve um problema concreto e recorrente: o nome do campeonato brasileiro
+     * carrega o patrocinador e muda de temporada em temporada ("Brasileirão
+     * Assaí" -> "Brasileirão Betano"). Casar por nome criaria um campeonato novo
+     * a cada troca de patrocinio, quebrando o historico em dois. O id 325
+     * atravessa tudo isso.
+     */
+    @Column(unique = true)
+    private Long idExterno;
+
     // 1 NACAO possui 0..N CAMPEONATO
     @ManyToOne(fetch = FetchType.EAGER)
     @JoinColumn(name = "nacao_id", nullable = false)
