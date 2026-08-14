@@ -77,6 +77,21 @@ public class BacktestService {
         public long duracaoMsPorReajuste;
         /** codigo do mercado -> metricas */
         public Map<String, Calibracao.Resultado> porMercado = new LinkedHashMap<>();
+        /** codigo do mercado -> intervalo de confianca do BSS */
+        public Map<String, Calibracao.IntervaloBSS> intervalos = new LinkedHashMap<>();
+        /** campeonatos que entraram (quando a rodada e agregada) */
+        public List<String> campeonatos = new ArrayList<>();
+        /**
+         * Metade da largura do IC95 do BSS, media entre mercados.
+         *
+         * E a RESOLUCAO do teste: efeitos menores que isto sao invisiveis nesta
+         * amostra, por melhor ou pior que o modelo seja. Skill realista em
+         * mercado de gols fica na casa de 0,02 a 0,06 -- se a resolucao for
+         * maior que isso, o backtest nao esta medindo o modelo, esta medindo
+         * ruido.
+         */
+        public double resolucao;
+        public String leitura;
 
         static Relatorio falha(String m) {
             Relatorio r = new Relatorio();
@@ -114,6 +129,16 @@ public class BacktestService {
      */
     public Relatorio rodar(Long campeonatoId, MatrizPlacares.Modelo modelo,
                            int aquecimento, int passoReajuste) {
+        return rodarInterno(campeonatoId, modelo, aquecimento, passoReajuste, null);
+    }
+
+    /**
+     * @param acumulado quando nao-nulo, os pontos tambem sao despejados aqui
+     *                  para agregacao entre campeonatos
+     */
+    private Relatorio rodarInterno(Long campeonatoId, MatrizPlacares.Modelo modelo,
+                                   int aquecimento, int passoReajuste,
+                                   Map<String, List<Calibracao.Ponto>> acumulado) {
 
         long t0 = System.currentTimeMillis();
 
@@ -167,8 +192,10 @@ public class BacktestService {
 
                 int gc = p.getGolsCasa(), gf = p.getGolsFora();
                 for (MercadoTeste t : TESTES) {
-                    pontos.get(t.nome()).add(new Calibracao.Ponto(
-                            t.probabilidade().apply(g), t.desfecho().ocorreu(gc, gf)));
+                    Calibracao.Ponto pt = new Calibracao.Ponto(
+                            t.probabilidade().apply(g), t.desfecho().ocorreu(gc, gf));
+                    pontos.get(t.nome()).add(pt);
+                    if (acumulado != null) acumulado.get(t.nome()).add(pt);
                 }
                 avaliadas++;
             }
@@ -186,12 +213,96 @@ public class BacktestService {
         r.penalidade = penalidadeUsada;
         r.rhoMedio = reajustes > 0 ? somaRho / reajustes : 0;
         r.rhoNaBorda = naBorda;
-        pontos.forEach((nome, lista) -> r.porMercado.put(nome, Calibracao.avaliar(lista)));
+        finalizar(r, pontos);
         r.duracaoMs = System.currentTimeMillis() - t0;
         r.duracaoMsPorReajuste = reajustes > 0 ? r.duracaoMs / reajustes : 0;
         r.mensagem = avaliadas + " partida(s) avaliadas fora da amostra, "
                 + reajustes + " reajuste(s), em " + r.duracaoMs + " ms.";
         return r;
+    }
+
+    private void finalizar(Relatorio r, Map<String, List<Calibracao.Ponto>> pontos) {
+        double somaLargura = 0;
+        int mercados = 0;
+        for (Map.Entry<String, List<Calibracao.Ponto>> e : pontos.entrySet()) {
+            r.porMercado.put(e.getKey(), Calibracao.avaliar(e.getValue()));
+            Calibracao.IntervaloBSS iv = Calibracao.bootstrapBSS(e.getValue());
+            r.intervalos.put(e.getKey(), iv);
+            somaLargura += (iv.superior() - iv.inferior()) / 2;
+            mercados++;
+        }
+        r.resolucao = mercados > 0 ? somaLargura / mercados : 0;
+
+        long comSkill = r.intervalos.values().stream().filter(i -> i.inferior() > 0).count();
+        long semSkill = r.intervalos.values().stream().filter(i -> i.superior() < 0).count();
+        if (comSkill > 0) {
+            r.leitura = comSkill + " mercado(s) com skill demonstrado (IC95 acima de zero).";
+        } else if (semSkill > 0) {
+            r.leitura = semSkill + " mercado(s) comprovadamente PIORES que a taxa base.";
+        } else {
+            r.leitura = String.format(
+                    "Nenhum mercado é distinguível da taxa base. Resolução do teste: ±%.3f de BSS."
+                            + " Skill realista em gols fica entre 0,02 e 0,06, então esta amostra não"
+                            + " conseguiria enxergar um modelo bom mesmo que ele fosse bom."
+                            + " O gargalo é DADO, não modelo.", r.resolucao);
+        }
+    }
+
+    /**
+     * Backtest AGREGADO sobre varios campeonatos.
+     *
+     * Cada campeonato e ajustado SEPARADAMENTE -- forcas de ataque de ligas
+     * diferentes nao sao comparaveis e misturar as partidas produziria um
+     * modelo que nao descreve nenhuma delas. Mas a AVALIACAO pode ser somada:
+     * "quando o modelo disse 60%, aconteceu 60%?" e a mesma pergunta em
+     * qualquer liga.
+     *
+     * E o unico jeito de sair de 86 casos sem esperar tres temporadas. Com
+     * quatro campeonatos de meia temporada voce chega perto de 350 avaliacoes,
+     * que ja e faixa de teste com poder.
+     */
+    public Relatorio rodarAgregado(List<Long> campeonatoIds, MatrizPlacares.Modelo modelo,
+                                   int aquecimento, int passoReajuste) {
+        long t0 = System.currentTimeMillis();
+        Map<String, List<Calibracao.Ponto>> acumulado = new LinkedHashMap<>();
+        for (MercadoTeste t : TESTES) acumulado.put(t.nome(), new ArrayList<>());
+
+        Relatorio agregado = new Relatorio();
+        int totais = 0, avaliadas = 0, reajustes = 0;
+        double somaRho = 0, penalidade = 0;
+        int comRho = 0, naBorda = 0;
+
+        for (Long id : campeonatoIds) {
+            Relatorio parcial = rodarInterno(id, modelo, aquecimento, passoReajuste, acumulado);
+            if (!parcial.sucesso) continue;
+            agregado.campeonatos.add("campeonato " + id + ": " + parcial.partidasAvaliadas + " avaliada(s)");
+            totais += parcial.partidasTotais;
+            avaliadas += parcial.partidasAvaliadas;
+            reajustes += parcial.reajustes;
+            somaRho += parcial.rhoMedio;
+            naBorda += parcial.rhoNaBorda;
+            penalidade = parcial.penalidade;
+            comRho++;
+        }
+
+        if (avaliadas == 0) {
+            return Relatorio.falha("Nenhum campeonato tinha histórico suficiente.");
+        }
+
+        agregado.sucesso = true;
+        agregado.modelo = modelo.name();
+        agregado.partidasTotais = totais;
+        agregado.partidasAvaliadas = avaliadas;
+        agregado.reajustes = reajustes;
+        agregado.penalidade = penalidade;
+        agregado.rhoMedio = comRho > 0 ? somaRho / comRho : 0;
+        agregado.rhoNaBorda = naBorda;
+        finalizar(agregado, acumulado);
+        agregado.duracaoMs = System.currentTimeMillis() - t0;
+        agregado.duracaoMsPorReajuste = reajustes > 0 ? agregado.duracaoMs / reajustes : 0;
+        agregado.mensagem = avaliadas + " partida(s) avaliadas em " + agregado.campeonatos.size()
+                + " campeonato(s), " + reajustes + " reajuste(s), em " + agregado.duracaoMs + " ms.";
+        return agregado;
     }
 
     private void adicionar(Partida p, Map<Long, Integer> indices, List<PartidaBruta> hist) {

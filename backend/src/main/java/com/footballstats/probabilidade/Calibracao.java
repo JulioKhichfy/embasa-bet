@@ -141,6 +141,76 @@ public final class Calibracao {
         return new Resultado(n, taxaBase, brier, brierBaseline, bss, logLoss, ece, ruido, vies, faixas);
     }
 
+    /** Intervalo de confianca do BSS por bootstrap pareado. */
+    public record IntervaloBSS(double inferior, double mediana, double superior,
+                               double probabilidadePositivo) {
+        /** O intervalo inclui zero? Se sim, nao ha skill DETECTAVEL nesta amostra. */
+        public boolean incluiZero() { return inferior <= 0 && superior >= 0; }
+
+        public String leitura() {
+            if (superior < 0) return "PIOR QUE A TAXA BASE (com confiança)";
+            if (inferior > 0) return "MELHOR QUE A TAXA BASE (com confiança)";
+            return "INDISTINGUÍVEL DA TAXA BASE nesta amostra";
+        }
+    }
+
+    /**
+     * Intervalo de 95% para o Brier Skill Score, por bootstrap.
+     *
+     * POR QUE ISTO E NECESSARIO
+     * -------------------------
+     * Um BSS pontual de -0,06 em 86 casos nao distingue "o modelo e pior que
+     * chutar a taxa base" de "o modelo empata com a taxa base e a amostra e
+     * curta". As duas conclusoes levam a acoes MUITO diferentes: a primeira diz
+     * para jogar o modelo fora, a segunda diz para coletar mais dados.
+     *
+     * Reamostramos as partidas COM reposicao e recalculamos BSS em cada
+     * reamostra. Pareado por construcao -- a mesma reamostra alimenta modelo e
+     * baseline -- o que remove a variacao comum e deixa so a diferenca, que e o
+     * que interessa.
+     */
+    public static IntervaloBSS bootstrapBSS(List<Ponto> pontos, int reps, long semente) {
+        int n = pontos.size();
+        if (n < 10) return new IntervaloBSS(0, 0, 0, 0);
+
+        java.util.Random rnd = new java.util.Random(semente);
+        double[] amostras = new double[reps];
+        int positivos = 0;
+
+        for (int r = 0; r < reps; r++) {
+            double somaBrier = 0;
+            int ocorridos = 0;
+            double[] ps = new double[n];
+            boolean[] ys = new boolean[n];
+            for (int i = 0; i < n; i++) {
+                Ponto pt = pontos.get(rnd.nextInt(n));
+                ps[i] = pt.p();
+                ys[i] = pt.ocorreu();
+                if (pt.ocorreu()) ocorridos++;
+            }
+            double taxa = (double) ocorridos / n;
+            for (int i = 0; i < n; i++) {
+                double y = ys[i] ? 1 : 0;
+                somaBrier += (ps[i] - y) * (ps[i] - y);
+            }
+            double brier = somaBrier / n;
+            double base = taxa * (1 - taxa);
+            double bss = base > 0 ? 1 - brier / base : 0;
+            amostras[r] = bss;
+            if (bss > 0) positivos++;
+        }
+        java.util.Arrays.sort(amostras);
+        return new IntervaloBSS(
+                amostras[(int) (reps * 0.025)],
+                amostras[reps / 2],
+                amostras[(int) (reps * 0.975)],
+                (double) positivos / reps);
+    }
+
+    public static IntervaloBSS bootstrapBSS(List<Ponto> pontos) {
+        return bootstrapBSS(pontos, 2000, 42);
+    }
+
     /**
      * Desvio ABSOLUTO esperado entre frequencia observada e probabilidade real
      * numa faixa com k observacoes, mesmo sob calibracao perfeita.
