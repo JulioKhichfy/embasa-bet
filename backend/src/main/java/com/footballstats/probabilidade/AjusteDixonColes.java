@@ -100,13 +100,34 @@ public final class AjusteDixonColes {
 
     static double logLL(List<PartidaBruta> parts, double[] ataque, double[] defesa,
                         double mando, double rho, double penalidade) {
+        return logLL(parts, ataque, defesa, mando, rho, penalidade, null);
+    }
+
+    /**
+     * @param pesos peso de cada partida na verossimilhanca; null = todos 1.
+     *
+     * DECAIMENTO TEMPORAL
+     * -------------------
+     * O Dixon-Coles original pondera cada partida por exp(-xi * dias_atras).
+     * A razao e simples: forca de clube nao e constante. Lesao, troca de
+     * tecnico, janela de transferencia e forma mudam o time ao longo da
+     * temporada, e sem ponderacao o jogo da rodada 1 pesa igual ao da rodada 20.
+     *
+     * O efeito colateral e que o peso EFETIVO da amostra encolhe -- com xi alto
+     * sobram poucas partidas realmente influentes, e a variancia das forcas
+     * sobe. Existe um otimo, e ele nao e adivinhavel: tem que sair de
+     * validacao fora da amostra.
+     */
+    static double logLL(List<PartidaBruta> parts, double[] ataque, double[] defesa,
+                        double mando, double rho, double penalidade, double[] pesos) {
         double s = 0;
-        for (PartidaBruta p : parts) {
+        for (int k = 0; k < parts.size(); k++) {
+            PartidaBruta p = parts.get(k);
             double lambda = Math.exp(ataque[p.casa()] + defesa[p.fora()] + mando);
             double mu     = Math.exp(ataque[p.fora()] + defesa[p.casa()]);
             double l = lnProbDC(p.golsCasa(), p.golsFora(), lambda, mu, rho);
             if (l == Double.NEGATIVE_INFINITY) return Double.NEGATIVE_INFINITY;
-            s += l;
+            s += (pesos == null ? l : l * pesos[k]);
         }
         if (penalidade > 0) {
             double pen = 0;
@@ -158,6 +179,24 @@ public final class AjusteDixonColes {
     }
 
     public static Ajuste estimar(int nTimes, List<PartidaBruta> partidas, int maxIter, double penalidade) {
+        return estimar(nTimes, partidas, maxIter, penalidade, null);
+    }
+
+    /**
+     * Pesos exponenciais a partir da idade de cada partida em dias.
+     *
+     * xi = 0 devolve null (sem ponderacao). Referencia: xi ~ 0,0065/dia da
+     * literatura equivale a meia-vida de ~107 dias.
+     */
+    public static double[] pesosPorIdade(double[] diasAtras, double xi) {
+        if (xi <= 0 || diasAtras == null) return null;
+        double[] w = new double[diasAtras.length];
+        for (int i = 0; i < w.length; i++) w[i] = Math.exp(-xi * Math.max(0, diasAtras[i]));
+        return w;
+    }
+
+    public static Ajuste estimar(int nTimes, List<PartidaBruta> partidas, int maxIter,
+                                 double penalidade, double[] pesos) {
         double[] ataque = new double[nTimes];
         double[] defesa = new double[nTimes];
         double mando = 0.1;
@@ -167,7 +206,7 @@ public final class AjusteDixonColes {
             return new Ajuste(List.of(), mando, rho, 0, 0, false, penalidade, false);
         }
 
-        double llAnt = logLL(partidas, ataque, defesa, mando, rho, penalidade);
+        double llAnt = logLL(partidas, ataque, defesa, mando, rho, penalidade, pesos);
         int it = 0;
         boolean convergiu = false;
 
@@ -178,12 +217,12 @@ public final class AjusteDixonColes {
                 final int idx = i;
                 ataque[i] = maximiza1D(v -> {
                     double bak = ataque[idx]; ataque[idx] = v;
-                    double l = logLL(partidas, ataque, defesa, mandoIter, rhoIter, penalidade);
+                    double l = logLL(partidas, ataque, defesa, mandoIter, rhoIter, penalidade, pesos);
                     ataque[idx] = bak; return l;
                 }, -3, 3, 40);
                 defesa[i] = maximiza1D(v -> {
                     double bak = defesa[idx]; defesa[idx] = v;
-                    double l = logLL(partidas, ataque, defesa, mandoIter, rhoIter, penalidade);
+                    double l = logLL(partidas, ataque, defesa, mandoIter, rhoIter, penalidade, pesos);
                     defesa[idx] = bak; return l;
                 }, -3, 3, 40);
             }
@@ -194,11 +233,11 @@ public final class AjusteDixonColes {
             for (int i = 0; i < nTimes; i++) ataque[i] -= media;
 
             final double rhoAtual = rho;
-            mando = maximiza1D(v -> logLL(partidas, ataque, defesa, v, rhoAtual, penalidade), -1, 1, 40);
+            mando = maximiza1D(v -> logLL(partidas, ataque, defesa, v, rhoAtual, penalidade, pesos), -1, 1, 40);
             final double mandoAtual = mando;
-            rho = maximiza1D(v -> logLL(partidas, ataque, defesa, mandoAtual, v, penalidade), RHO_MIN, RHO_MAX, 40);
+            rho = maximiza1D(v -> logLL(partidas, ataque, defesa, mandoAtual, v, penalidade, pesos), RHO_MIN, RHO_MAX, 40);
 
-            double ll = logLL(partidas, ataque, defesa, mando, rho, penalidade);
+            double ll = logLL(partidas, ataque, defesa, mando, rho, penalidade, pesos);
             if (Math.abs(ll - llAnt) < 1e-5) { convergiu = true; llAnt = ll; it++; break; }
             llAnt = ll;
         }

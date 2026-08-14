@@ -10,6 +10,7 @@ import com.footballstats.probabilidade.MercadoGols;
 import com.footballstats.repository.PartidaRepository;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -139,6 +140,17 @@ public class BacktestService {
     private Relatorio rodarInterno(Long campeonatoId, MatrizPlacares.Modelo modelo,
                                    int aquecimento, int passoReajuste,
                                    Map<String, List<Calibracao.Ponto>> acumulado) {
+        return rodarInterno(campeonatoId, modelo, aquecimento, passoReajuste, acumulado, -1, 0);
+    }
+
+    /**
+     * @param penalidadeFixa valor de ridge; negativo usa penalidadeSugerida
+     * @param xi             decaimento temporal por dia; 0 desliga
+     */
+    private Relatorio rodarInterno(Long campeonatoId, MatrizPlacares.Modelo modelo,
+                                   int aquecimento, int passoReajuste,
+                                   Map<String, List<Calibracao.Ponto>> acumulado,
+                                   double penalidadeFixa, double xi) {
 
         long t0 = System.currentTimeMillis();
 
@@ -157,9 +169,13 @@ public class BacktestService {
 
         Map<Long, Integer> indices = new HashMap<>();
         List<PartidaBruta> historico = new ArrayList<>();
+        List<LocalDate> datas = new ArrayList<>();
 
         // aquecimento: entra no histórico, não é avaliado
-        for (int i = 0; i < aquecimento; i++) adicionar(todas.get(i), indices, historico);
+        for (int i = 0; i < aquecimento; i++) {
+            adicionar(todas.get(i), indices, historico);
+            datas.add(todas.get(i).getData());
+        }
 
         Ajuste ajuste = null;
         int desdeReajuste = Integer.MAX_VALUE;
@@ -170,7 +186,10 @@ public class BacktestService {
             Partida p = todas.get(i);
 
             if (desdeReajuste >= passoReajuste) {
-                ajuste = AjusteDixonColes.estimar(indices.size(), historico);
+                ajuste = AjusteDixonColes.estimar(indices.size(), historico, 60,
+                        penalidadeFixa >= 0 ? penalidadeFixa
+                                : AjusteDixonColes.penalidadeSugerida(indices.size(), historico.size()),
+                        pesosAte(datas, p.getData(), xi));
                 reajustes++;
                 desdeReajuste = 0;
                 somaRho += ajuste.rho();
@@ -201,6 +220,7 @@ public class BacktestService {
             }
 
             adicionar(p, indices, historico);
+            datas.add(p.getData());
             desdeReajuste++;
         }
 
@@ -263,6 +283,12 @@ public class BacktestService {
      */
     public Relatorio rodarAgregado(List<Long> campeonatoIds, MatrizPlacares.Modelo modelo,
                                    int aquecimento, int passoReajuste) {
+        return rodarAgregado(campeonatoIds, modelo, aquecimento, passoReajuste, -1, 0);
+    }
+
+    public Relatorio rodarAgregado(List<Long> campeonatoIds, MatrizPlacares.Modelo modelo,
+                                   int aquecimento, int passoReajuste,
+                                   double penalidadeFixa, double xi) {
         long t0 = System.currentTimeMillis();
         Map<String, List<Calibracao.Ponto>> acumulado = new LinkedHashMap<>();
         for (MercadoTeste t : TESTES) acumulado.put(t.nome(), new ArrayList<>());
@@ -273,7 +299,8 @@ public class BacktestService {
         int comRho = 0, naBorda = 0;
 
         for (Long id : campeonatoIds) {
-            Relatorio parcial = rodarInterno(id, modelo, aquecimento, passoReajuste, acumulado);
+            Relatorio parcial = rodarInterno(id, modelo, aquecimento, passoReajuste, acumulado,
+                    penalidadeFixa, xi);
             if (!parcial.sucesso) continue;
             agregado.campeonatos.add("campeonato " + id + ": " + parcial.partidasAvaliadas + " avaliada(s)");
             totais += parcial.partidasTotais;
@@ -303,6 +330,135 @@ public class BacktestService {
         agregado.mensagem = avaliadas + " partida(s) avaliadas em " + agregado.campeonatos.size()
                 + " campeonato(s), " + reajustes + " reajuste(s), em " + agregado.duracaoMs + " ms.";
         return agregado;
+    }
+
+    // ==================================================================
+    // Varredura de hiperparâmetros
+    // ==================================================================
+
+    public record Config(double penalidade, double xi) { }
+
+    public static class LinhaVarredura {
+        public double penalidade;
+        public double xi;
+        public int n;
+        /** BSS médio entre os mercados testados. */
+        public double bssMedio;
+        /** Quantos mercados terminaram com IC95 inteiramente acima de zero. */
+        public int mercadosComSkill;
+        public double eceRelativoMedio;
+        public double rhoMedio;
+        public int rhoNaBorda;
+        public long duracaoMs;
+    }
+
+    public static class Varredura {
+        public boolean sucesso;
+        public String mensagem;
+        public List<LinhaVarredura> linhas = new ArrayList<>();
+        public double resolucao;
+        /**
+         * Quanto o MELHOR BSS da grade está inflado só por escolher o máximo de
+         * várias tentativas ruidosas. Ver {@link #aviso}.
+         */
+        public double vieselecao;
+        public String aviso;
+    }
+
+    /**
+     * Varre a grade (penalidade x decaimento) avaliando cada config fora da amostra.
+     *
+     * CUIDADO COM O QUE ISTO PODE E NAO PODE DIZER
+     * --------------------------------------------
+     * Escolher o maior BSS de uma grade de K configuracoes NAO devolve o melhor
+     * modelo -- devolve o modelo que teve mais sorte no conjunto de teste. Com
+     * resolucao de +-0,04 e uma grade de 16, o maximo esperado sob a hipotese de
+     * que todas sao iguais ja fica ~0,07 acima da media, e isso e MAIOR que o
+     * efeito que estamos procurando (skill realista fica entre 0,02 e 0,06).
+     *
+     * Entao o uso legitimo desta varredura e DIAGNOSTICO, nao selecao:
+     *
+     *   - Existe um PLATO suave? Uma regiao larga de configs boas e sinal real;
+     *     um pico isolado cercado de vales e ruido.
+     *   - O decaimento temporal move a agulha de forma consistente em toda a
+     *     faixa de penalidade, ou so num ponto?
+     *   - O rho para de encostar na borda em alguma regiao?
+     *
+     * Escolher a config pelo maximo desta grade e depois reportar o BSS dela como
+     * evidencia e a versao lenta de vazamento de dados.
+     */
+    public Varredura varrer(List<Long> campeonatoIds, MatrizPlacares.Modelo modelo,
+                            int aquecimento, int passoReajuste,
+                            double[] penalidades, double[] decaimentos) {
+
+        Varredura v = new Varredura();
+        for (double pen : penalidades) {
+            for (double xi : decaimentos) {
+                long t0 = System.currentTimeMillis();
+                Relatorio r = rodarAgregado(campeonatoIds, modelo, aquecimento, passoReajuste, pen, xi);
+                if (!r.sucesso) continue;
+
+                LinhaVarredura l = new LinhaVarredura();
+                l.penalidade = pen;
+                l.xi = xi;
+                l.n = r.partidasAvaliadas;
+                l.rhoMedio = r.rhoMedio;
+                l.rhoNaBorda = r.rhoNaBorda;
+                l.duracaoMs = System.currentTimeMillis() - t0;
+
+                double somaBss = 0, somaEce = 0;
+                int m = 0, comSkill = 0;
+                for (Map.Entry<String, Calibracao.Resultado> e : r.porMercado.entrySet()) {
+                    somaBss += e.getValue().brierSkillScore();
+                    somaEce += e.getValue().eceRelativo();
+                    m++;
+                    Calibracao.IntervaloBSS iv = r.intervalos.get(e.getKey());
+                    if (iv != null && iv.inferior() > 0) comSkill++;
+                }
+                l.bssMedio = m > 0 ? somaBss / m : 0;
+                l.eceRelativoMedio = m > 0 ? somaEce / m : 0;
+                l.mercadosComSkill = comSkill;
+                v.linhas.add(l);
+                v.resolucao = r.resolucao;
+            }
+        }
+
+        if (v.linhas.isEmpty()) {
+            v.sucesso = false;
+            v.mensagem = "Nenhuma configuração produziu resultado; histórico insuficiente.";
+            return v;
+        }
+
+        v.sucesso = true;
+        int k = v.linhas.size();
+        // Maximo esperado de k normais padrao ~ sqrt(2 ln k); em unidades de
+        // erro-padrao do BSS, que e resolucao/1,96.
+        double erroPadrao = v.resolucao / 1.96;
+        v.vieselecao = erroPadrao * Math.sqrt(2 * Math.log(Math.max(2, k)));
+        v.mensagem = k + " configuração(ões) avaliadas sobre " + v.linhas.get(0).n + " partidas.";
+        v.aviso = String.format(
+                "Escolher o máximo desta grade infla o BSS em ~%.3f só por seleção (k=%d,"
+                        + " resolução ±%.3f). Procure PLATÔ, não pico: uma região larga de configs boas"
+                        + " é sinal; um máximo isolado é sorte.", v.vieselecao, k, v.resolucao);
+        return v;
+    }
+
+    /**
+     * Pesos exponenciais pela idade de cada partida histórica na data de referência.
+     *
+     * Usa toEpochDay() em vez de ChronoUnit.DAYS.between(): é a mesma conta
+     * (LocalDate já guarda o dia como inteiro internamente), dispensa o pacote
+     * java.time.temporal e evita a chamada por elemento num laço que roda a cada
+     * reajuste.
+     */
+    private double[] pesosAte(List<LocalDate> datas, LocalDate ref, double xi) {
+        if (xi <= 0) return null;
+        long diaRef = ref.toEpochDay();
+        double[] dias = new double[datas.size()];
+        for (int i = 0; i < dias.length; i++) {
+            dias[i] = diaRef - datas.get(i).toEpochDay();
+        }
+        return AjusteDixonColes.pesosPorIdade(dias, xi);
     }
 
     private void adicionar(Partida p, Map<Long, Integer> indices, List<PartidaBruta> hist) {
