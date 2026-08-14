@@ -63,6 +63,18 @@ public class BacktestService {
         public int partidasAvaliadas;
         public int reajustes;
         public long duracaoMs;
+        /** Regularização aplicada; 0 = nenhuma. */
+        public double penalidade;
+        /** rho médio dos ajustes. Em futebol espera-se algo entre -0.15 e 0. */
+        public double rhoMedio;
+        /**
+         * Quantos ajustes terminaram com rho encostado no limite de busca.
+         * Acima de zero é sinal de má especificação: o rho está sendo usado para
+         * compensar algo que ele não descreve — quase sempre dispersão a mais nas
+         * forças de ataque/defesa.
+         */
+        public int rhoNaBorda;
+        public long duracaoMsPorReajuste;
         /** codigo do mercado -> metricas */
         public Map<String, Calibracao.Resultado> porMercado = new LinkedHashMap<>();
 
@@ -126,7 +138,8 @@ public class BacktestService {
 
         Ajuste ajuste = null;
         int desdeReajuste = Integer.MAX_VALUE;
-        int reajustes = 0, avaliadas = 0;
+        int reajustes = 0, avaliadas = 0, naBorda = 0;
+        double somaRho = 0, penalidadeUsada = 0;
 
         for (int i = aquecimento; i < todas.size(); i++) {
             Partida p = todas.get(i);
@@ -135,6 +148,9 @@ public class BacktestService {
                 ajuste = AjusteDixonColes.estimar(indices.size(), historico);
                 reajustes++;
                 desdeReajuste = 0;
+                somaRho += ajuste.rho();
+                penalidadeUsada = ajuste.penalidade();
+                if (ajuste.rhoNaBorda()) naBorda++;
             }
 
             Integer ic = indices.get(p.getClubeCasa().getId());
@@ -167,8 +183,12 @@ public class BacktestService {
         r.partidasTotais = todas.size();
         r.partidasAvaliadas = avaliadas;
         r.reajustes = reajustes;
+        r.penalidade = penalidadeUsada;
+        r.rhoMedio = reajustes > 0 ? somaRho / reajustes : 0;
+        r.rhoNaBorda = naBorda;
         pontos.forEach((nome, lista) -> r.porMercado.put(nome, Calibracao.avaliar(lista)));
         r.duracaoMs = System.currentTimeMillis() - t0;
+        r.duracaoMsPorReajuste = reajustes > 0 ? r.duracaoMs / reajustes : 0;
         r.mensagem = avaliadas + " partida(s) avaliadas fora da amostra, "
                 + reajustes + " reajuste(s), em " + r.duracaoMs + " ms.";
         return r;

@@ -40,7 +40,8 @@ public final class AjusteDixonColes {
 
     /** Resultado do ajuste. */
     public record Ajuste(List<ForcaClube> forcas, double mando, double rho,
-                         double logVerossimilhanca, int iteracoes, boolean convergiu) {
+                         double logVerossimilhanca, int iteracoes, boolean convergiu,
+                         double penalidade, boolean rhoNaBorda) {
 
         /** Gols esperados de i (mandante) contra j (visitante). */
         public double[] golsEsperados(int i, int j) {
@@ -53,6 +54,10 @@ public final class AjusteDixonColes {
         }
     }
 
+    /** Limites de busca do rho. Fora disto a correcao deixa de fazer sentido físico. */
+    public static final double RHO_MIN = -0.30;
+    public static final double RHO_MAX = 0.10;
+
     private AjusteDixonColes() { }
 
     /** ln P(x,y) sob Dixon-Coles para uma partida. */
@@ -64,8 +69,37 @@ public final class AjusteDixonColes {
         return lnPoisX + lnPoisY + Math.log(t);
     }
 
+    /**
+     * Log-verossimilhanca PENALIZADA (ridge sobre as forcas em escala log).
+     *
+     * penalidade = 0 reproduz o comportamento original.
+     *
+     * POR QUE ISTO E NECESSARIO EM CAMPEONATO CURTO
+     * ---------------------------------------------
+     * O modelo tem 2 parametros por clube. Com 20 clubes sao 40 forcas livres
+     * mais mando e rho. Uma temporada de 190 jogos da menos de 5 observacoes por
+     * parametro -- o MLE nao tem como distinguir "este ataque e forte de verdade"
+     * de "este ataque teve sorte em quatro jogos", e empurra as forcas para
+     * valores extremos que descrevem o passado e nao preveem nada.
+     *
+     * O sintoma disso NAO e viés no nivel medio de gols: e DISPERSAO DEMAIS. Com
+     * forcas exageradas, alguns confrontos recebem lambda muito alto e outros
+     * muito baixo; a mistura dessas Poissons tem cauda mais gorda dos DOIS lados
+     * que a realidade. Na pratica o modelo prevê goleadas e 0-0 em excesso e
+     * placares medios de menos -- exatamente onde mora a maioria dos jogos.
+     *
+     * O termo -k*(sum a^2 + sum d^2) encolhe as forcas em direcao a media da
+     * liga. Clube com muitos jogos e desempenho consistente resiste ao encolhimento
+     * (a verossimilhanca paga por isso); clube com amostra curta cede. E o
+     * comportamento que se quer.
+     */
     static double logLL(List<PartidaBruta> parts, double[] ataque, double[] defesa,
                         double mando, double rho) {
+        return logLL(parts, ataque, defesa, mando, rho, 0);
+    }
+
+    static double logLL(List<PartidaBruta> parts, double[] ataque, double[] defesa,
+                        double mando, double rho, double penalidade) {
         double s = 0;
         for (PartidaBruta p : parts) {
             double lambda = Math.exp(ataque[p.casa()] + defesa[p.fora()] + mando);
@@ -73,6 +107,11 @@ public final class AjusteDixonColes {
             double l = lnProbDC(p.golsCasa(), p.golsFora(), lambda, mu, rho);
             if (l == Double.NEGATIVE_INFINITY) return Double.NEGATIVE_INFINITY;
             s += l;
+        }
+        if (penalidade > 0) {
+            double pen = 0;
+            for (int i = 0; i < ataque.length; i++) pen += ataque[i] * ataque[i] + defesa[i] * defesa[i];
+            s -= penalidade * pen;
         }
         return s;
     }
@@ -90,21 +129,45 @@ public final class AjusteDixonColes {
         return (a + b) / 2;
     }
 
+    /** Penalidade padrao. Ver {@link #penalidadeSugerida}. */
     public static Ajuste estimar(int nTimes, List<PartidaBruta> partidas) {
-        return estimar(nTimes, partidas, 60);
+        return estimar(nTimes, partidas, 60, penalidadeSugerida(nTimes, partidas.size()));
     }
 
-    public static Ajuste estimar(int nTimes, List<PartidaBruta> partidas, int maxIter) {
+    /** Sem regularizacao -- so para reproduzir o comportamento antigo. */
+    public static Ajuste estimarSemPenalidade(int nTimes, List<PartidaBruta> partidas) {
+        return estimar(nTimes, partidas, 60, 0);
+    }
+
+    /**
+     * Penalidade em funcao da razao observacoes/parametro.
+     *
+     * A regularizacao precisa ser forte onde ha pouco dado e desaparecer quando
+     * ha muito -- senao ela vira vies permanente. Com 2 parametros por clube,
+     * obs/param = partidas/(2*nTimes). A forma abaixo encolhe bastante abaixo de
+     * ~10 obs/param e some acima de ~30.
+     *
+     * A constante foi escolhida por experimento fora da amostra, nao por teoria.
+     * Se um dia houver base grande o bastante, troque por validacao cruzada.
+     */
+    public static double penalidadeSugerida(int nTimes, int nPartidas) {
+        if (nTimes <= 0 || nPartidas <= 0) return 0;
+        double obsPorParam = nPartidas / (2.0 * nTimes);
+        if (obsPorParam >= 30) return 0;
+        return 12.0 * (1.0 / Math.max(1.0, obsPorParam) - 1.0 / 30.0);
+    }
+
+    public static Ajuste estimar(int nTimes, List<PartidaBruta> partidas, int maxIter, double penalidade) {
         double[] ataque = new double[nTimes];
         double[] defesa = new double[nTimes];
         double mando = 0.1;
         double rho = MatrizPlacares.Params.padrao().rho();
 
         if (partidas.isEmpty() || nTimes == 0) {
-            return new Ajuste(List.of(), mando, rho, 0, 0, false);
+            return new Ajuste(List.of(), mando, rho, 0, 0, false, penalidade, false);
         }
 
-        double llAnt = logLL(partidas, ataque, defesa, mando, rho);
+        double llAnt = logLL(partidas, ataque, defesa, mando, rho, penalidade);
         int it = 0;
         boolean convergiu = false;
 
@@ -115,12 +178,12 @@ public final class AjusteDixonColes {
                 final int idx = i;
                 ataque[i] = maximiza1D(v -> {
                     double bak = ataque[idx]; ataque[idx] = v;
-                    double l = logLL(partidas, ataque, defesa, mandoIter, rhoIter);
+                    double l = logLL(partidas, ataque, defesa, mandoIter, rhoIter, penalidade);
                     ataque[idx] = bak; return l;
                 }, -3, 3, 40);
                 defesa[i] = maximiza1D(v -> {
                     double bak = defesa[idx]; defesa[idx] = v;
-                    double l = logLL(partidas, ataque, defesa, mandoIter, rhoIter);
+                    double l = logLL(partidas, ataque, defesa, mandoIter, rhoIter, penalidade);
                     defesa[idx] = bak; return l;
                 }, -3, 3, 40);
             }
@@ -131,17 +194,22 @@ public final class AjusteDixonColes {
             for (int i = 0; i < nTimes; i++) ataque[i] -= media;
 
             final double rhoAtual = rho;
-            mando = maximiza1D(v -> logLL(partidas, ataque, defesa, v, rhoAtual), -1, 1, 40);
+            mando = maximiza1D(v -> logLL(partidas, ataque, defesa, v, rhoAtual, penalidade), -1, 1, 40);
             final double mandoAtual = mando;
-            rho = maximiza1D(v -> logLL(partidas, ataque, defesa, mandoAtual, v), -0.30, 0.10, 40);
+            rho = maximiza1D(v -> logLL(partidas, ataque, defesa, mandoAtual, v, penalidade), RHO_MIN, RHO_MAX, 40);
 
-            double ll = logLL(partidas, ataque, defesa, mando, rho);
+            double ll = logLL(partidas, ataque, defesa, mando, rho, penalidade);
             if (Math.abs(ll - llAnt) < 1e-5) { convergiu = true; llAnt = ll; it++; break; }
             llAnt = ll;
         }
 
         List<ForcaClube> forcas = new ArrayList<>(nTimes);
         for (int i = 0; i < nTimes; i++) forcas.add(new ForcaClube(i, ataque[i], defesa[i]));
-        return new Ajuste(forcas, mando, rho, llAnt, it, convergiu);
+
+        // rho encostado no limite nao e uma estimativa, e um pedido de socorro:
+        // significa que o modelo esta usando rho para compensar algo que rho nao
+        // descreve. Sinalizamos em vez de fingir que o numero e valido.
+        boolean naBorda = rho > RHO_MAX - 1e-3 || rho < RHO_MIN + 1e-3;
+        return new Ajuste(forcas, mando, rho, llAnt, it, convergiu, penalidade, naBorda);
     }
 }
