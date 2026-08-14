@@ -107,3 +107,4 @@ test-output/
 *.crt
 backend/data/footballstats.mv.db
 backend/data/footballstats.mv.db
+backend/data/footballstats.mv.db
