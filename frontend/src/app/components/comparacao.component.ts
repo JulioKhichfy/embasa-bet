@@ -4,6 +4,7 @@ import { FormsModule } from '@angular/forms';
 import { ActivatedRoute, Router } from '@angular/router';
 import { ClubeDetalhe, PartidaResumo, Ranking, RankingQuesito } from '../models/entities.model';
 import { PartidaService } from '../services/partida.service';
+import { ClubeService } from '../services/clube.service';
 import { STAT_FIELDS, CATEGORIAS, StatMeta } from '../models/sofascore.model';
 import { MODELOS, ModeloId, ResultadoModelo, calcular, PARAMS_PADRAO } from '../models/probabilidade.model';
 
@@ -29,6 +30,23 @@ interface LadoClube {
   abertos: Set<number>;          // partidaIds com accordion aberto
   // desativados[partidaId] = Set de campos desativados naquela partida
   desativados: Map<number, Set<string>>;
+}
+
+/**
+ * Uma linha da classificação montada nesta tela.
+ *
+ * A tabela é construída no cliente a partir do detalhe de cada clube, igual ao
+ * dashboard faz. Assim ela obedece ao mesmo recorte (últimos N + CASA/FORA) que
+ * o resto da tela, coisa que um endpoint de classificação pronto não daria sem
+ * receber os mesmos parâmetros.
+ */
+interface LinhaTabela {
+  clubeId: number;
+  nome: string;
+  jogos: number;
+  pontos: number;
+  v: number; e: number; d: number;
+  gf: number; gs: number; sg: number;
 }
 
 /** Uma linha do quadro de probabilidades (mercado + 3 visões). */
@@ -87,6 +105,7 @@ interface LinhaPrev {
     </div>
     <p class="muted mini">
       Estimativas derivadas das médias atuais de cada clube (N por lado no seletor de cada painel).
+      <span class="recorte">{{ recorte() }}</span>
       Modelo probabilístico simples (Poisson) para fins de referência — não é garantia de resultado.
       <b>Casa = {{ casa.nome }}</b>, <b>Fora = {{ fora.nome }}</b>.
     </p>
@@ -111,6 +130,7 @@ interface LinhaPrev {
     <div class="modeloBox">
       <div class="secHd">
         <h3>Modelo probabilístico</h3>
+        <span class="recorte">{{ recorte() }}</span>
         <span class="spacer"></span>
         <button class="btn-ghost expBtn" (click)="mostrarParams = !mostrarParams">
           {{ mostrarParams ? 'Ocultar ajustes' : '⚙ Ajustes' }}
@@ -174,7 +194,8 @@ interface LinhaPrev {
     </div>
 
     <!-- 1X2 -->
-    <h3>Resultado (1X2) <span class="pill">{{ descricaoModeloNome() }}</span></h3>
+    <h3>Resultado (1X2) <span class="pill">{{ descricaoModeloNome() }}</span>
+      <span class="recorte">{{ recorte() }}</span></h3>
     <div class="probBars">
       <div class="pb">
         <span class="pbLbl cCasa">Vitória {{ casa.nome }}</span>
@@ -220,19 +241,87 @@ interface LinhaPrev {
       </div>
     </div>
 
+    <!-- ======== CLASSIFICAÇÃO DO CAMPEONATO ======== -->
+    <div class="dadosBox">
+      <div class="secHd">
+        <h3>Classificação<span *ngIf="campeonatoNome"> — {{ campeonatoNome }}</span></h3>
+        <span class="spacer"></span>
+        <label class="lim mini">últimos
+          <input type="number" min="1" [ngModel]="limiteTabela"
+                 (ngModelChange)="onLimiteTabela($event)" style="width:56px">
+          jogos
+        </label>
+        <div class="fbtns">
+          <button *ngFor="let f of filtros" class="fbtn" [class.on]="filtroTabela===f"
+                  (click)="setFiltroTabela(f)">{{ f }}</button>
+        </div>
+      </div>
+
+      <p class="muted mini" *ngIf="filtroTabela === 'TODOS'">
+        Pontuação considerando apenas as últimas {{ limiteTabela }} partidas de cada clube.
+        Os dois clubes em comparação aparecem destacados.
+      </p>
+      <p class="aviso mini" *ngIf="filtroTabela !== 'TODOS'">
+        <b>Isto não é a classificação oficial.</b> É a tabela que sairia se só valessem os
+        jogos {{ filtroTabela === 'CASA' ? 'em casa' : 'fora' }} — útil para ver quem depende
+        do mando, mas não corresponde a nenhuma tabela real. Clubes com número diferente de
+        jogos nesse recorte não são diretamente comparáveis por pontos.
+      </p>
+
+      <div *ngIf="carregandoTabela" class="muted mini">montando tabela…</div>
+      <div *ngIf="!carregandoTabela && !tabela.length" class="muted mini">
+        Sem partidas para este recorte.
+      </div>
+
+      <table class="clasTab" *ngIf="tabela.length">
+        <thead>
+          <tr>
+            <th class="c">#</th><th>Clube</th>
+            <th class="c">J</th><th class="c">P</th>
+            <th class="c">V</th><th class="c">E</th><th class="c">D</th>
+            <th class="c">GF</th><th class="c">GS</th><th class="c">SG</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr *ngFor="let ln of tabela; let i = index"
+              [class.tCasa]="ln.clubeId === casa.clubeId"
+              [class.tFora]="ln.clubeId === fora.clubeId">
+            <td class="c pos">{{ i + 1 }}</td>
+            <td class="qn">{{ ln.nome }}</td>
+            <td class="c muted">{{ ln.jogos }}</td>
+            <td class="c pts"><b>{{ ln.pontos }}</b></td>
+            <td class="c">{{ ln.v }}</td>
+            <td class="c">{{ ln.e }}</td>
+            <td class="c">{{ ln.d }}</td>
+            <td class="c muted">{{ ln.gf }}</td>
+            <td class="c muted">{{ ln.gs }}</td>
+            <td class="c" [class.sgPos]="ln.sg > 0" [class.sgNeg]="ln.sg < 0">
+              {{ ln.sg > 0 ? '+' : '' }}{{ ln.sg }}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <p class="muted mini" *ngIf="tabela.length">
+        Ordenação: pontos → vitórias → saldo → gols feitos → nome.
+      </p>
+    </div>
+
     <!-- ======== DADOS DOS CLUBES (ranking global) ======== -->
     <div class="dadosBox">
       <div class="secHd">
         <h3>Dados dos clubes</h3>
         <span class="spacer"></span>
-        <span class="pill" title="O ranking é do campeonato inteiro e não segue os filtros dos painéis">TODOS</span>
+        <div class="fbtns">
+          <button *ngFor="let f of filtros" class="fbtn" [class.on]="filtroRanking===f"
+                  (click)="setFiltroRanking(f)">{{ f }}</button>
+        </div>
         <button class="btn-ghost expBtn" (click)="rankingExpandido = !rankingExpandido">
           {{ rankingExpandido ? 'Ver só os comparados' : 'Ver ranking geral' }}
         </button>
       </div>
       <p class="muted mini">
-        Ranking dos clubes <b>do campeonato</b> (todos os jogos, últimas {{ limiteBusca }} partidas).
-        <b>Não segue os filtros CASA/FORA dos painéis</b>: a classificação é do campeonato, não do recorte de cada lado.
+        Ranking dos clubes <b>do campeonato</b>, últimas {{ limiteBusca }} partidas, recorte
+        <b>{{ filtroRanking }}</b>. Este filtro é <b>independente</b> dos painéis de cada clube.
         <b>T</b> = total somado · <b>M</b> = média por partida. Linhas destacadas são os clubes em comparação.
         Para <b>Posição na tabela</b>, T = pontos e M = pontos por jogo.
       </p>
@@ -264,7 +353,7 @@ interface LinhaPrev {
     </div>
 
     <!-- Totais previstos: conservadora / moderada / arrojada -->
-    <h3>Previsões de totais na partida</h3>
+    <h3>Previsões de totais na partida <span class="recorte">{{ recorte() }}</span></h3>
     <p class="muted mini">
       <b>Conservadora</b> = mínima (visão prudente) · <b>Moderada</b> = cenário médio · <b>Arrojada</b> = um nível acima.
     </p>
@@ -537,6 +626,30 @@ interface LinhaPrev {
     .ladoHd { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
     .ladoHd h2 { margin: 0; }
     .fbtns.lado { padding: 3px; border: 1px solid var(--border); border-radius: 8px; }
+
+    /* selo do recorte em vigor nos quadros que combinam os dois clubes */
+    .recorte { display: inline-block; margin-left: 8px; padding: 2px 8px;
+               font-size: 10px; font-weight: 600; letter-spacing: .3px;
+               border-radius: 999px; background: var(--surface-2); color: var(--text-dim);
+               vertical-align: middle; }
+
+    /* classificação */
+    .clasTab { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .clasTab th { color: var(--text-dim); font-size: 10px; text-transform: uppercase;
+                  letter-spacing: .4px; padding: 6px 8px; text-align: left;
+                  border-bottom: 1px solid var(--border); }
+    .clasTab td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+    .clasTab .c { text-align: center; }
+    .clasTab .pos { color: var(--text-dim); font-weight: 800; width: 34px; }
+    .clasTab .pts { background: rgba(62,166,255,.06); }
+    .clasTab tr:hover td { background: var(--surface-2); }
+    .clasTab tr.tCasa td { background: rgba(62,166,255,.14); }
+    .clasTab tr.tCasa .qn { color: var(--accent); font-weight: 700; }
+    .clasTab tr.tFora td { background: rgba(124,92,255,.14); }
+    .clasTab tr.tFora .qn { color: var(--accent-2); font-weight: 700; }
+    .clasTab .sgPos { color: var(--win); }
+    .clasTab .sgNeg { color: var(--loss); }
+    .aviso { color: var(--draw); }
     .fbtns.lado.bCasa { border-color: var(--accent); }
     .fbtns.lado.bFora { border-color: var(--accent-2); }    .fbtn { padding: 3px 9px; font-size: 11px; border-radius: 6px; background: var(--surface-2); color: var(--text-dim); }
     .fbtn.on { background: var(--accent); color: #06121f; }
@@ -597,7 +710,21 @@ export class ComparacaoComponent implements OnInit {
   campos: StatMeta[] = STAT_FIELDS;
   private debounce?: any;
 
-  constructor(private route: ActivatedRoute, private router: Router, private partidaSvc: PartidaService) {}
+  // ---------------- Classificação ----------------
+  /** Recorte da classificação; independente dos painéis e do ranking. */
+  filtroTabela = 'TODOS';
+  limiteTabela = 5;
+  tabela: LinhaTabela[] = [];
+  carregandoTabela = false;
+  campeonatoNome = '';
+  private clubesDoCampeonato: { id: number; nome: string }[] = [];
+  private debounceTabela?: any;
+
+  /** Recorte do painel "Dados dos clubes"; também independente. */
+  filtroRanking = 'TODOS';
+
+  constructor(private route: ActivatedRoute, private router: Router,
+              private partidaSvc: PartidaService, private clubeSvc: ClubeService) {}
 
   novoLado(): LadoClube {
     return { clubeId: 0, nome: '', filtro: 'TODOS',
@@ -638,6 +765,7 @@ export class ComparacaoComponent implements OnInit {
   carregar() {
     [this.casa, this.fora].forEach(l => this.carregarLado(l));
     this.carregarRanking();
+    this.carregarTabela();
   }
 
   /** Carrega as partidas de UM lado, com o filtro daquele lado. */
@@ -665,10 +793,103 @@ export class ComparacaoComponent implements OnInit {
   // ---------------- Ranking / Dados dos clubes ----------------
   carregarRanking() {
     // clubeId restringe o ranking ao campeonato do clube comparado.
-    // Sempre 'TODOS': a classificação é do campeonato e não acompanha os
-    // filtros dos painéis (ver comentário em LadoClube).
-    this.partidaSvc.ranking('TODOS', this.limiteBusca, this.casa.clubeId)
+    this.partidaSvc.ranking(this.filtroRanking, this.limiteBusca, this.casa.clubeId)
       .subscribe(r => this.ranking = r);
+  }
+
+  /**
+   * Troca o recorte do ranking.
+   *
+   * Ele é independente dos painéis DE PROPÓSITO: são perguntas diferentes.
+   * O painel pergunta "como este clube joga em casa"; o ranking pergunta "como
+   * ele se compara aos outros". Amarrar os dois obrigaria a mudar a base de
+   * comparação toda vez que se olha um lado.
+   */
+  setFiltroRanking(f: string) {
+    if (this.filtroRanking === f) return;
+    this.filtroRanking = f;
+    this.carregarRanking();
+  }
+
+  // ---------------- Classificação do campeonato ----------------
+
+  setFiltroTabela(f: string) {
+    if (this.filtroTabela === f) return;
+    this.filtroTabela = f;
+    this.carregarTabela();
+  }
+
+  onLimiteTabela(v: number) {
+    this.limiteTabela = Math.max(1, Number(v) || 1);
+    clearTimeout(this.debounceTabela);
+    this.debounceTabela = setTimeout(() => this.carregarTabela(), 400);
+  }
+
+  /**
+   * Monta a classificação no cliente, um detalhe por clube.
+   *
+   * São ~20 requisições — o mesmo que o dashboard já faz. Vale o custo porque é
+   * o que permite a tabela obedecer ao MESMO recorte da tela (últimos N +
+   * CASA/FORA); um endpoint pronto de classificação devolveria sempre a
+   * temporada inteira.
+   *
+   * A lista de clubes é buscada uma vez e reaproveitada entre trocas de filtro.
+   */
+  carregarTabela() {
+    if (!this.casa.clubeId) return;
+    if (this.clubesDoCampeonato.length) { this.montarTabela(); return; }
+
+    this.clubeSvc.listar().subscribe(todos => {
+      const eu = todos.find(c => c.id === this.casa.clubeId);
+      const campId = eu?.campeonato?.id;
+      this.campeonatoNome = eu?.campeonato?.nome || '';
+      this.clubesDoCampeonato = todos
+        .filter(c => c.id != null && c.campeonato?.id === campId)
+        .map(c => ({ id: c.id!, nome: c.nome }));
+      this.montarTabela();
+    });
+  }
+
+  private montarTabela() {
+    if (!this.clubesDoCampeonato.length) { this.tabela = []; return; }
+    this.carregandoTabela = true;
+
+    const linhas: LinhaTabela[] = [];
+    let pendentes = this.clubesDoCampeonato.length;
+
+    const encerrar = () => {
+      if (--pendentes > 0) return;
+      // Clube sem jogo no recorte sai da tabela: uma linha zerada em CASA/FORA
+      // sugeriria "último colocado" quando na verdade é ausência de dado.
+      this.tabela = linhas.filter(l => l.jogos > 0).sort((a, b) =>
+        b.pontos - a.pontos || b.v - a.v || b.sg - a.sg || b.gf - a.gf ||
+        a.nome.localeCompare(b.nome, 'pt', { sensitivity: 'base' }));
+      this.carregandoTabela = false;
+    };
+
+    for (const c of this.clubesDoCampeonato) {
+      this.partidaSvc.detalheClube(c.id, this.filtroTabela, this.limiteTabela).subscribe({
+        next: d => {
+          const ps = d.partidas.slice(0, this.limiteTabela);
+          const v = ps.filter(p => p.resultado === 'V').length;
+          const e = ps.filter(p => p.resultado === 'E').length;
+          const gf = ps.reduce((s2, p) => s2 + p.golsFeitos, 0);
+          const gs = ps.reduce((s2, p) => s2 + p.golsSofridos, 0);
+          linhas.push({
+            clubeId: c.id, nome: c.nome, jogos: ps.length,
+            pontos: v * 3 + e, v, e, d: ps.length - v - e,
+            gf, gs, sg: gf - gs
+          });
+          encerrar();
+        },
+        error: () => encerrar()
+      });
+    }
+  }
+
+  /** Texto do selo: qual recorte alimenta os quadros combinados. */
+  recorte(): string {
+    return `${this.casa.nome || 'casa'} ${this.casa.filtro} × ${this.fora.nome || 'fora'} ${this.fora.filtro}`;
   }
 
   /** Só os 2 clubes comparados, preservando a posição no ranking global. */
