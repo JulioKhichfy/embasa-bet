@@ -82,6 +82,15 @@ export interface LinhaMercado {
   iv?: IntervaloBSS;
   eceRelativo: number;
   veredito: string;
-  /** true quando o IC95 do BSS não cruza o zero. */
+  /** true quando o IC95 do BSS não cruza o zero, em qualquer direção. */
   conclusivo: boolean;
+  /**
+   * Direção da conclusão, separada de propósito.
+   *
+   * A primeira versão pintava de verde tudo que era "conclusivo" — inclusive
+   * mercado comprovadamente PIOR que chutar a taxa base. Verde para "seu modelo
+   * perde do palpite burro" é o tipo de erro visual que faz alguém apostar.
+   */
+  melhorQueBase: boolean;
+  piorQueBase: boolean;
 }

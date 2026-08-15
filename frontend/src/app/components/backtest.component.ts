@@ -3,7 +3,7 @@ import { CommonModule } from '@angular/common';
 import { FormsModule } from '@angular/forms';
 import { CampeonatoService } from '../services/campeonato.service';
 import { BacktestService } from '../services/backtest.service';
-import { Campeonato } from '../models/entities.model'; 
+import { Campeonato } from '../models/entities.model';
 import {
   CalibracaoResultado, Faixa, LinhaMercado, RelatorioBacktest, Varredura
 } from '../models/backtest.model';
@@ -45,6 +45,13 @@ import {
         Cada partida é prevista usando <b>apenas</b> as partidas anteriores a ela.
         Vários campeonatos são ajustados separadamente e a avaliação é somada.
       </p>
+      <p class="hint">
+        <b>Aquecimento</b>: quantos jogos de cada campeonato entram só como histórico, sem
+        serem avaliados — no começo da temporada o modelo mal viu jogo e essas previsões
+        sujariam a nota. <b>Reestimar a cada</b>: de quantas em quantas partidas as forças
+        dos clubes são recalculadas. Reestimar a cada jogo é o ideal e o mais lento;
+        espaçar economiza tempo e só <i>piora</i> a nota, nunca a infla.
+      </p>
 
       <div class="camps">
         <button *ngFor="let c of campeonatos"
@@ -64,10 +71,12 @@ import {
             <option value="NEG_BIN">Binomial Negativa</option>
           </select>
         </label>
-        <label>Aquecimento
+        <label title="As N primeiras partidas de cada campeonato só alimentam o histórico e não são avaliadas. Sem elas, as primeiras previsões sairiam de um modelo que quase não viu jogo nenhum e sujariam a nota.">
+          Aquecimento (jogos)
           <input type="number" [(ngModel)]="aquecimento" min="20" step="10">
         </label>
-        <label>Reajuste a cada
+        <label title="De quantas em quantas partidas o modelo é reestimado. 1 é o ideal estatístico e o mais lento; valores maiores só pioram a nota medida, nunca a inflam.">
+          Reestimar a cada
           <input type="number" [(ngModel)]="passo" min="1" step="1">
         </label>
         <span class="spacer"></span>
@@ -156,7 +165,7 @@ import {
                 <line x1="100" y1="2" x2="100" y2="20" class="zero"/>
                 <line [attr.x1]="x(l.iv?.inferior)" y1="11"
                       [attr.x2]="x(l.iv?.superior)" y2="11"
-                      class="barra" [class.conc]="l.conclusivo"/>
+                      class="barra" [class.bom]="l.melhorQueBase" [class.mau]="l.piorQueBase"/>
                 <line [attr.x1]="x(l.iv?.inferior)" y1="6"
                       [attr.x2]="x(l.iv?.inferior)" y2="16" class="cap"/>
                 <line [attr.x1]="x(l.iv?.superior)" y1="6"
@@ -176,7 +185,9 @@ import {
             <td class="r dim">
               {{ l.res.vies > 0 ? '+' : '' }}{{ l.res.vies * 100 | number:'1.1-1' }}
             </td>
-            <td class="ver" [class.conc]="l.conclusivo">{{ l.veredito }}</td>
+            <td class="ver" [class.bom]="l.melhorQueBase" [class.mau]="l.piorQueBase">
+              {{ l.veredito }}
+            </td>
           </tr>
         </tbody>
       </table>
@@ -383,7 +394,8 @@ import {
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
     .ruim { color: var(--loss); font-weight: 700; }
     .ver { font-size: 11px; color: var(--text-dim); }
-    .ver.conc { color: var(--text); font-weight: 600; }
+    .ver.bom { color: var(--win); font-weight: 600; }
+    .ver.mau { color: var(--loss); font-weight: 600; }
     .bss { font-variant-numeric: tabular-nums; font-weight: 600;
            color: var(--text-dim); margin-left: 6px; font-size: 11px; }
     .bss.pos { color: var(--win); }
@@ -392,7 +404,8 @@ import {
     .ci { width: 130px; height: 22px; vertical-align: middle; }
     .ci .zero { stroke: var(--text-dim); stroke-width: 1; stroke-dasharray: 2 2; }
     .ci .barra { stroke: var(--text-dim); stroke-width: 2.5; }
-    .ci .barra.conc { stroke: var(--win); }
+    .ci .barra.bom { stroke: var(--win); }
+    .ci .barra.mau { stroke: var(--loss); }
     .ci .cap { stroke: var(--text-dim); stroke-width: 1.5; }
     .ci .ponto { fill: var(--text); }
     .ci .ponto.pos { fill: var(--win); }
@@ -497,20 +510,22 @@ export class BacktestComponent implements OnInit {
       const res = r.porMercado[codigo];
       const iv = r.intervalos ? r.intervalos[codigo] : undefined;
       const eceRel = res.eceRuido > 0 ? res.ece / res.eceRuido : 0;
-      const conclusivo = !!iv && (iv.inferior > 0 || iv.superior < 0);
-      return { codigo, res, iv, eceRelativo: eceRel, conclusivo,
-               veredito: this.veredito(res, iv, conclusivo) };
+      const melhor = !!iv && iv.inferior > 0;
+      const pior = !!iv && iv.superior < 0;
+      return { codigo, res, iv, eceRelativo: eceRel,
+               conclusivo: melhor || pior, melhorQueBase: melhor, piorQueBase: pior,
+               veredito: this.veredito(res, melhor, pior) };
     });
     // pior primeiro: o que precisa de atenção não deve exigir rolagem
     this.linhas.sort((a, b) => a.res.brierSkillScore - b.res.brierSkillScore);
     if (this.linhas.length) this.selecionar(this.linhas[this.linhas.length - 1]);
   }
 
-  private veredito(res: CalibracaoResultado, iv: { inferior: number; superior: number } | undefined,
-                   conclusivo: boolean): string {
+  private veredito(res: CalibracaoResultado, melhor: boolean, pior: boolean): string {
     if (res.n < 100) return `amostra curta (${res.n})`;
-    if (!conclusivo) return 'indistinguível da taxa base';
-    return iv && iv.inferior > 0 ? 'melhor que a taxa base' : 'pior que a taxa base';
+    if (melhor) return 'melhor que a taxa base';
+    if (pior) return 'pior que a taxa base';
+    return 'indistinguível da taxa base';
   }
 
   selecionar(l: LinhaMercado) {
