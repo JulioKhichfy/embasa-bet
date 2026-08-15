@@ -16,6 +16,7 @@ import { BackupService } from './services/backup.service';
         <a routerLink="/cadastros" routerLinkActive="active">Cadastros</a>
         <a routerLink="/anotacoes" routerLinkActive="active">Anotações</a>
         <a routerLink="/apostas" routerLinkActive="active">Apostas</a>
+        <a routerLink="/backtest" routerLinkActive="active">Backtest</a>
       </nav>
       <span class="spacer"></span>
 

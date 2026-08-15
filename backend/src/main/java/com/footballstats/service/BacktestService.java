@@ -347,6 +347,13 @@ public class BacktestService {
         /** Quantos mercados terminaram com IC95 inteiramente acima de zero. */
         public int mercadosComSkill;
         public double eceRelativoMedio;
+        /**
+         * Resolucao DESTA configuracao. Nao e comparavel entre linhas: quanto
+         * mais forte a regularizacao, mais comprimidas ficam as previsoes e mais
+         * estreito o intervalo -- um IC apertado aqui pode significar "modelo
+         * preciso" ou "modelo que nao arrisca nada".
+         */
+        public double resolucao;
         public double rhoMedio;
         public int rhoNaBorda;
         public long duracaoMs;
@@ -416,10 +423,10 @@ public class BacktestService {
                     if (iv != null && iv.inferior() > 0) comSkill++;
                 }
                 l.bssMedio = m > 0 ? somaBss / m : 0;
+                l.resolucao = r.resolucao;
                 l.eceRelativoMedio = m > 0 ? somaEce / m : 0;
                 l.mercadosComSkill = comSkill;
                 v.linhas.add(l);
-                v.resolucao = r.resolucao;
             }
         }
 
@@ -431,6 +438,10 @@ public class BacktestService {
 
         v.sucesso = true;
         int k = v.linhas.size();
+        // media entre configuracoes -- antes eu guardava a resolucao da ULTIMA
+        // linha da grade, o que fazia a grade parecer mais precisa do que era
+        // sempre que a ultima config era a mais regularizada.
+        v.resolucao = v.linhas.stream().mapToDouble(x -> x.resolucao).average().orElse(0);
         // Maximo esperado de k normais padrao ~ sqrt(2 ln k); em unidades de
         // erro-padrao do BSS, que e resolucao/1,96.
         double erroPadrao = v.resolucao / 1.96;

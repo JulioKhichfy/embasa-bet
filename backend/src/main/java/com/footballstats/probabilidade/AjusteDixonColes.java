@@ -54,9 +54,51 @@ public final class AjusteDixonColes {
         }
     }
 
+    /**
+     * Constantes da penalidade, CALIBRADAS CONTRA DADO REAL.
+     *
+     * A versao anterior usava escala 12, derivada de simulacao com parametros
+     * que eu mesmo escolhi -- nao tinha por que valer no futebol de verdade. Uma
+     * varredura fora da amostra sobre 418 partidas de 4 campeonatos mostrou:
+     *
+     *     penalidade      0      3      8     16     30
+     *     BSS medio  -0.048 -0.008 +0.001 +0.003 +0.001
+     *     ECE/ruido    1.82   1.24   1.08   1.12   1.15
+     *
+     * Plato largo entre 8 e 30, queda acentuada em direcao a zero. A escala foi
+     * ajustada para cair no meio desse plato no porte tipico de campeonato
+     * brasileiro (~20 clubes, ~4 observacoes por parametro), onde produz ~9.
+     *
+     * Plato largo importa: significa que errar a penalidade por um fator de 2
+     * quase nao custa nada, enquanto NAO regularizar custa 0,05 de BSS.
+     */
+    public static final double ESCALA_PENALIDADE = 45.0;
+
+    /** Acima desta razao observacoes/parametro a regularizacao e desligada. */
+    public static final double LIMIAR_SEM_PENALIDADE = 30.0;
+
     /** Limites de busca do rho. Fora disto a correcao deixa de fazer sentido físico. */
     public static final double RHO_MIN = -0.30;
-    public static final double RHO_MAX = 0.10;
+
+    /**
+     * Limite superior do rho, ALARGADO de 0,10 para 0,30.
+     *
+     * O valor antigo vinha da literatura europeia, onde rho e negativo: mais
+     * 0-0 e 1-1 que o Poisson independente preveria. Nos dados brasileiros
+     * medidos aqui o sinal e o OPOSTO -- rho estimado positivo (+0,02 a +0,03),
+     * encostando no teto em 5 a 10 dos 43 ajustes, e o modelo super-prevendo
+     * empates (+3,2 pontos percentuais no mercado de empate).
+     *
+     * Positivo significa MENOS 1-1 e 0-0 que o Poisson independente: os gols
+     * dos dois times sao negativamente correlacionados nesta amostra. Manter o
+     * teto em 0,10 forcava a estimativa a parar antes do otimo e jogava o
+     * residuo para dentro das forcas de ataque e defesa, onde ele nao pertence.
+     *
+     * Nao e "consertar" o modelo -- e deixar de impedi-lo de dizer o que os
+     * dados dizem. Se depois de alargado o rho continuar encostando, aí sim a
+     * forma da correcao de Dixon-Coles nao serve para este futebol.
+     */
+    public static final double RHO_MAX = 0.30;
 
     private AjusteDixonColes() { }
 
@@ -174,8 +216,8 @@ public final class AjusteDixonColes {
     public static double penalidadeSugerida(int nTimes, int nPartidas) {
         if (nTimes <= 0 || nPartidas <= 0) return 0;
         double obsPorParam = nPartidas / (2.0 * nTimes);
-        if (obsPorParam >= 30) return 0;
-        return 12.0 * (1.0 / Math.max(1.0, obsPorParam) - 1.0 / 30.0);
+        if (obsPorParam >= LIMIAR_SEM_PENALIDADE) return 0;
+        return ESCALA_PENALIDADE * (1.0 / Math.max(1.0, obsPorParam) - 1.0 / LIMIAR_SEM_PENALIDADE);
     }
 
     public static Ajuste estimar(int nTimes, List<PartidaBruta> partidas, int maxIter, double penalidade) {
@@ -185,8 +227,15 @@ public final class AjusteDixonColes {
     /**
      * Pesos exponenciais a partir da idade de cada partida em dias.
      *
-     * xi = 0 devolve null (sem ponderacao). Referencia: xi ~ 0,0065/dia da
-     * literatura equivale a meia-vida de ~107 dias.
+     * xi = 0 devolve null (sem ponderacao).
+     *
+     * MEDIDO NO DADO REAL: o decaimento temporal NAO ajuda neste volume de
+     * dados. Varredura sobre 418 partidas com xi = 0,005 moveu o BSS entre
+     * -0,0006 e +0,0031 conforme a penalidade -- tudo muito abaixo da resolucao
+     * do teste (+-0,022). A explicacao e que decaimento encolhe a amostra
+     * efetiva, e com ~4 observacoes por parametro o custo em variancia engole o
+     * ganho em viés. Mantido no codigo para reavaliar quando houver varias
+     * temporadas; ate la, xi = 0.
      */
     public static double[] pesosPorIdade(double[] diasAtras, double xi) {
         if (xi <= 0 || diasAtras == null) return null;
